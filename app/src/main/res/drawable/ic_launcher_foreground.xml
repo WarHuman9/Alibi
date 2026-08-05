@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Secondary/Shadow Handset for "Alibi" (Double) effect -->
+    <path
+        android:pathData="M46,42 C46,39 43,37 40,37 L32,37 C29,37 27,39 27,42 L27,54 C27,57 29,59 32,59 L37,59 C37,72 45,80 58,80 L58,85 C58,88 60,90 63,90 L75,90 C78,90 80,88 80,85 L80,77 C80,74 78,72 75,72 L70,72 C57,72 46,61 46,48 L46,42 Z"
+        android:fillAlpha="0.4"
+        android:fillColor="#FFFFFF" />
+
+    <!-- Main Handset -->
+    <path
+        android:pathData="M40,36 C40,33 37,31 34,31 L26,31 C23,31 21,33 21,36 L21,48 C21,51 23,53 26,53 L31,53 C31,66 39,74 52,74 L52,79 C52,82 54,84 57,84 L69,84 C72,84 74,82 74,79 L74,71 C74,68 72,66 69,66 L64,66 C51,66 40,55 40,42 L40,36 Z"
+        android:fillColor="#FFFFFF" />
+</vector>
