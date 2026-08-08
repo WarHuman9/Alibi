@@ -78,24 +78,21 @@ class CallNotificationService : Service() {
                 .setContentText(phoneNumber)
                 .setContentIntent(pendingIntent)
                 .setOngoing(true)
+                .setLocalOnly(true)
+                .setOnlyAlertOnce(true)
+                .setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
                 .setCategory(Notification.CATEGORY_CALL)
 
             // Tiered Notification Strategy:
             // 1. Ringing (Incoming): CallStyle.forIncomingCall -> Colorful buttons, NO timer.
-            // 2. Active: CallStyle.forOngoingCall -> Colorful button, WITH timer.
-            // 3. Dialing/Missed: Standard Notification -> Standard buttons, NO timer chip (Fix for Samsung).
+            // 2. Active/Connecting (Ongoing/Outgoing): CallStyle.forOngoingCall -> Colorful button, WITH timer.
+            // 3. Missed: Standard Notification -> Standard buttons.
             
             val isRinging = isIncoming && !isMissed && !isDialing
             val isActive = !isIncoming && !isMissed && !isDialing
+            val isConnecting = isDialing && !isMissed
 
-            val sdkVersion = Build.VERSION.SDK_INT
-            @SuppressLint("NewApi")
-            val canUseFullScreen = if (sdkVersion >= 34) {
-                val manager = getSystemService(NotificationManager::class.java)
-                manager.canUseFullScreenIntent()
-            } else {
-                true
-            }
+            val canUseFullScreen = canUseFullScreenIntent()
 
             if (isRinging && !isSimulated) {
                 // Real incoming call gets full screen intent priority if permitted
@@ -106,29 +103,30 @@ class CallNotificationService : Service() {
 
             if (isRinging) {
                 builder.style = Notification.CallStyle.forIncomingCall(person, hangupIntent, answerIntent)
-            } else if (isActive) {
+            } else if (isActive || isConnecting) {
+                // Use CallStyle for both Active and Connecting (Dialing) phases to ensure "Stickiness"
                 val finalStartTime = if (startTime > 0L) startTime else System.currentTimeMillis()
-                builder.setWhen(finalStartTime)
-                builder.setUsesChronometer(true)
-                builder.setShowWhen(true)
+                
+                // Only show timer if the call is actually Active (connected)
+                if (isActive) {
+                    builder.setWhen(finalStartTime)
+                    builder.setUsesChronometer(true)
+                    builder.setShowWhen(true)
+                } else {
+                    builder.setShowWhen(false)
+                }
+                
                 builder.style = Notification.CallStyle.forOngoingCall(person, hangupIntent)
             } else {
-                // Dialing or Missed - Use standard notification to suppress Samsung status bar timer
+                // Missed - Use standard notification
                 builder.setShowWhen(false)
                 builder.setUsesChronometer(false)
+                builder.setOngoing(false) // Missed call logs should be removable
                 
-                if (isDialing) {
-                    val action = Notification.Action.Builder(
-                        android.graphics.drawable.Icon.createWithResource(this, android.R.drawable.ic_menu_close_clear_cancel),
-                        "Hangup", hangupIntent).build()
-                    builder.addAction(action)
-                } else {
-                    // Missed
-                    val action = Notification.Action.Builder(
-                        android.graphics.drawable.Icon.createWithResource(this, android.R.drawable.ic_menu_close_clear_cancel),
-                        "Dismiss", hangupIntent).build()
-                    builder.addAction(action)
-                }
+                val action = Notification.Action.Builder(
+                    android.graphics.drawable.Icon.createWithResource(this, android.R.drawable.ic_menu_close_clear_cancel),
+                    "Dismiss", hangupIntent).build()
+                builder.addAction(action)
             }
             
             builder.build()
@@ -156,17 +154,8 @@ class CallNotificationService : Service() {
                 .apply {
                     if (isIncoming && !isMissed) addAction(android.R.drawable.ic_menu_call, "Answer", answerIntent)
                     
-                    if (!isSimulated) {
-                        val sdkVersionInner = Build.VERSION.SDK_INT
-                        @SuppressLint("NewApi")
-                        if (sdkVersionInner >= 34) {
-                            val manager = getSystemService(NotificationManager::class.java)
-                            if (manager.canUseFullScreenIntent()) {
-                                setFullScreenIntent(pendingIntent, true)
-                            }
-                        } else {
-                            setFullScreenIntent(pendingIntent, true)
-                        }
+                    if (!isSimulated && canUseFullScreenIntent()) {
+                        setFullScreenIntent(pendingIntent, true)
                     }
                 }
                 .build()
@@ -184,6 +173,18 @@ class CallNotificationService : Service() {
         }
     }
 
+    @SuppressLint("NewApi")
+    private fun canUseFullScreenIntent(): Boolean {
+        // Use a more resilient check to satisfy the toolchain analyzer
+        val version = Build.VERSION.SDK_INT
+        return if (version >= 34) {
+            val manager = getSystemService(NotificationManager::class.java)
+            manager.canUseFullScreenIntent()
+        } else {
+            true
+        }
+    }
+
     private fun createNotificationChannels() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val manager = getSystemService(NotificationManager::class.java)
@@ -191,6 +192,9 @@ class CallNotificationService : Service() {
             val activeChannel = NotificationChannel(CHANNEL_ID, "Simulated Calls", NotificationManager.IMPORTANCE_HIGH).apply {
                 description = "Notifications for simulated calls"
                 setSound(null, null)
+                enableLights(false)
+                enableVibration(false)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
             }
             manager.createNotificationChannel(activeChannel)
 
@@ -207,6 +211,9 @@ class CallNotificationService : Service() {
         if (wakeLock?.isHeld == true) {
             wakeLock?.release()
         }
+        // Explicitly cancel the notification to ensure it disappears instantly
+        val manager = getSystemService(NotificationManager::class.java)
+        manager.cancel(NOTIFICATION_ID)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

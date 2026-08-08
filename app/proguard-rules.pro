@@ -25,8 +25,11 @@
 # Navigation 3 relies on serialization of NavKey implementations
 -keep class * implements androidx.navigation3.runtime.NavKey { *; }
 -keep interface androidx.navigation3.runtime.NavKey { *; }
-# Keep internal adaptive logic for multi-pane layouts
--keep class androidx.compose.material3.adaptive.** { *; }
+# Surgical rules for Adaptive Layouts to prevent stripping critical layout metadata
+-keep class androidx.compose.material3.adaptive.WindowAdaptiveInfo { *; }
+-keep class androidx.compose.material3.adaptive.layout.PaneScaffoldDirective { *; }
+-keep class androidx.compose.material3.adaptive.layout.ThreePaneScaffoldValue { *; }
+-keep interface androidx.compose.material3.adaptive.** { *; }
 
 # --- Telecom Framework ---
 # Ensure that subclasses of Telecom services are not stripped or renamed

@@ -1,45 +1,56 @@
 package com.example.alibi.telecom
 
-import android.telecom.Call
+import android.content.Context
 import android.provider.CallLog
-import androidx.core.content.edit
+import android.telecom.Call
+import android.telecom.PhoneAccountHandle
+import android.util.Log
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
+/**
+ * Singleton manager for call state across the application.
+ * Synchronizes Real and Simulated call states for the UI.
+ */
 object CallStateManager {
+    private const val TAG = "CallStateManager"
+
     private val _currentCall = MutableStateFlow<Call?>(null)
     val currentCall: StateFlow<Call?> = _currentCall.asStateFlow()
 
     private val _callState = MutableStateFlow(Call.STATE_DISCONNECTED)
     val callState: StateFlow<Int> = _callState.asStateFlow()
 
-    private val _isSimulatedCallActive = MutableStateFlow(value = false)
+    private val _isSimulatedCallActive = MutableStateFlow(false)
     val isSimulatedCallActive: StateFlow<Boolean> = _isSimulatedCallActive.asStateFlow()
 
-    private val _isRealCall = MutableStateFlow(value = false)
+    private val _isRealCall = MutableStateFlow(false)
     val isRealCall: StateFlow<Boolean> = _isRealCall.asStateFlow()
 
     private val _simulatedPhoneNumber = MutableStateFlow<String?>(null)
     val simulatedPhoneNumber: StateFlow<String?> = _simulatedPhoneNumber.asStateFlow()
 
     private val _startTime = MutableStateFlow(0L)
+    val startTime: StateFlow<Long> = _startTime.asStateFlow()
 
     private val _customStartTime = MutableStateFlow<Long?>(null)
-
     private val _intendedDuration = MutableStateFlow<Long?>(null)
-
-    private val _mimicSimHandle = MutableStateFlow<android.telecom.PhoneAccountHandle?>(null)
-
+    private val _mimicSimHandle = MutableStateFlow<PhoneAccountHandle?>(null)
     private val _callFeatures = MutableStateFlow(0)
 
-    private val _isMuted = MutableStateFlow(value = false)
+    private val _isMuted = MutableStateFlow(false)
     val isMuted: StateFlow<Boolean> = _isMuted.asStateFlow()
 
-    private val _speakerOn = MutableStateFlow(value = false)
+    private val _speakerOn = MutableStateFlow(false)
     val speakerOn: StateFlow<Boolean> = _speakerOn.asStateFlow()
 
-    private val _isBusy = MutableStateFlow(value = false)
+    private val _isBusy = MutableStateFlow(false)
     val isBusy: StateFlow<Boolean> = _isBusy.asStateFlow()
 
     private val _busyMessage = MutableStateFlow<String?>(null)
@@ -51,42 +62,14 @@ object CallStateManager {
     private val _callType = MutableStateFlow(CallLog.Calls.INCOMING_TYPE)
     val logCallType: StateFlow<Int> = _callType.asStateFlow()
 
+    // Request callbacks for UI -> Service interaction
+    var onAnswerRequested: (() -> Unit)? = null
     var onDisconnectRequested: (() -> Unit)? = null
+    var onMuteRequested: ((Boolean) -> Unit)? = null
+    var onSpeakerRequested: ((Boolean) -> Unit)? = null
+
     private var isUserTerminated = false
-
-    private fun persistSession(context: android.content.Context) {
-        context.getSharedPreferences("active_simulation", android.content.Context.MODE_PRIVATE).edit {
-            putString("num", _simulatedPhoneNumber.value)
-            putLong("start", _startTime.value)
-            putLong("custom_start", _customStartTime.value ?: -1L)
-            putLong("intended_dur", _intendedDuration.value ?: -1L)
-            putInt("type", _callType.value)
-            putInt("feats", _callFeatures.value)
-            putString("sim_id", _mimicSimHandle.value?.id)
-            putBoolean("active", _isSimulatedCallActive.value)
-        }
-    }
-
-    private fun clearPersistedSession(context: android.content.Context) {
-        context.getSharedPreferences("active_simulation", android.content.Context.MODE_PRIVATE).edit {
-            clear()
-        }
-    }
-
-    fun restoreState(context: android.content.Context) {
-        val prefs = context.getSharedPreferences("active_simulation", android.content.Context.MODE_PRIVATE)
-        if (prefs.getBoolean("active", false)) {
-            _simulatedPhoneNumber.value = prefs.getString("num", null)
-            _startTime.value = prefs.getLong("start", 0L)
-            val custom = prefs.getLong("custom_start", -1L)
-            _customStartTime.value = if (custom != -1L) custom else null
-            val intended = prefs.getLong("intended_dur", -1L)
-            _intendedDuration.value = if (intended != -1L) intended else null
-            _callType.value = prefs.getInt("type", CallLog.Calls.INCOMING_TYPE)
-            _callFeatures.value = prefs.getInt("feats", 0)
-            _isSimulatedCallActive.value = true
-        }
-    }
+    private val managerScope = CoroutineScope(Dispatchers.Main)
 
     private val callCallback = object : Call.Callback() {
         override fun onStateChanged(call: Call, state: Int) {
@@ -97,27 +80,15 @@ object CallStateManager {
     }
 
     private fun updateBusyState() {
-        val currentCallState = _currentCall.value?.let { 
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
-                it.details.state
-            } else {
-                @Suppress("DEPRECATION")
-                it.state
-            }
-        } ?: Call.STATE_DISCONNECTED
-        val simulatedActive = _isSimulatedCallActive.value
+        val hasRealCall = _currentCall.value != null
+        val hasSimCall = _isSimulatedCallActive.value
+        val isActive = hasRealCall || hasSimCall
         
-        val isActive = (currentCallState != Call.STATE_DISCONNECTED) || simulatedActive
         _isBusy.value = isActive
-        
-        if (isActive) {
-            _busyMessage.value = if (_isRealCall.value) {
-                "A real call is currently happening. Try again later."
-            } else {
-                "There is already an ongoing Simulated call. Try again later."
-            }
-        } else {
-            _busyMessage.value = null
+        _busyMessage.value = when {
+            _isRealCall.value -> "A real call is currently happening. Try again later."
+            hasSimCall -> "There is already an ongoing Simulated call. Try again later."
+            else -> null
         }
     }
 
@@ -130,42 +101,21 @@ object CallStateManager {
         }
     }
 
-    fun setCustomStartTime(timestamp: Long?) {
-        _customStartTime.value = timestamp
-    }
+    // --- State Setters ---
 
-    fun setIntendedDuration(duration: Long?) {
-        _intendedDuration.value = duration
-    }
+    fun setCustomStartTime(timestamp: Long?) { _customStartTime.value = timestamp }
+    fun setIntendedDuration(duration: Long?) { _intendedDuration.value = duration }
+    fun setMimicSimHandle(handle: PhoneAccountHandle?) { _mimicSimHandle.value = handle }
+    fun setCallFeatures(features: Int) { _callFeatures.value = features }
 
-    fun setMimicSimHandle(handle: android.telecom.PhoneAccountHandle?) {
-        _mimicSimHandle.value = handle
-    }
-
-    fun setCallFeatures(features: Int) {
-        _callFeatures.value = features
-    }
-
-    fun onCallAdded(call: Call, context: android.content.Context, isSimulated: Boolean? = null) {
+    fun onCallAdded(call: Call, context: Context, isSimulated: Boolean? = null) {
         _currentCall.value = call
-        val state = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
-            call.details.state
-        } else {
-            @Suppress("DEPRECATION")
-            call.state
-        }
-        _callState.value = state
+        _callState.value = call.state
         
-        // Detect if this is our own simulated call or a real network call
         val isSimulatedCall = isSimulated ?: _isSimulatedCallActive.value
         _isRealCall.value = !isSimulatedCall
         
-        if (!isSimulatedCall) {
-            // Real call pre-emption logic
-            preemptSimulatedCall(context)
-        }
-        
-        updateTimes(state)
+        updateTimes(call.state)
         updateBusyState()
         call.registerCallback(callCallback)
     }
@@ -175,136 +125,145 @@ object CallStateManager {
             call.unregisterCallback(callCallback)
             _currentCall.value = null
             _callState.value = Call.STATE_DISCONNECTED
-            
-            // If it was a simulated call, we might need to cleanup
-            if (_isSimulatedCallActive.value) {
-                _isSimulatedCallActive.value = false
-            }
-            
             _isRealCall.value = false
             updateBusyState()
-            
-            // Reset simulation data immediately to prevent duplicate logging
-            _simulatedPhoneNumber.value = null
-            _startTime.value = 0
-            _answerTime.value = 0
-            _customStartTime.value = null
-            _intendedDuration.value = null
         }
     }
 
-    fun preemptSimulatedCall(context: android.content.Context) {
-        if (_isSimulatedCallActive.value) {
-            isUserTerminated = false // Instant pre-emption isn't user termination in the manual sense
-            onDisconnectRequested?.invoke()
-            recordCallEndInternal(context) // Save what we can
-            _isSimulatedCallActive.value = false
-            updateBusyState()
-        }
-    }
-
-    fun setSimulatedCallActive(context: android.content.Context, active: Boolean, phoneNumber: String? = null, state: Int = Call.STATE_ACTIVE, type: Int? = null) {
+    fun setSimulatedCallActive(context: Context, active: Boolean, phoneNumber: String? = null, state: Int = Call.STATE_ACTIVE, type: Int? = null) {
         _isSimulatedCallActive.value = active
-        if (phoneNumber != null) {
-            _simulatedPhoneNumber.value = phoneNumber
-        }
+        if (phoneNumber != null) _simulatedPhoneNumber.value = phoneNumber
+        
         if (active) {
             _callState.value = state
             updateTimes(state)
-            if (type != null) {
-                _callType.value = type
-            }
-            persistSession(context)
+            if (type != null) _callType.value = type
         } else {
             _callState.value = Call.STATE_DISCONNECTED
-            clearPersistedSession(context)
         }
         updateBusyState()
     }
 
-    fun recordCallEnd(context: android.content.Context) {
-        recordCallEndInternal(context)
-    }
+    // --- Termination & Logging ---
 
-    private fun recordCallEndInternal(context: android.content.Context? = null) {
-        val phoneNumber = _simulatedPhoneNumber.value ?: return
+    /**
+     * Records call end. Uses a launch with NonCancellable to ensure DB write finishes.
+     */
+    fun recordCallEnd(context: Context) {
+        val number = _simulatedPhoneNumber.value ?: return
         val start = _startTime.value
         val answer = _answerTime.value
+        val type = _callType.value
         val intended = _intendedDuration.value
         val simHandle = _mimicSimHandle.value
-        val features = _callFeatures.value
-
-        // Only log if we have a number AND it was explicitly a simulated call
-        if (_isSimulatedCallActive.value && (start > 0 || _customStartTime.value != null)) {
-            val endTime = System.currentTimeMillis()
-            val finalStartTime = _customStartTime.value ?: start
-            
-            // Logic for Duration & Call Type
-            var finalType = _callType.value
-            var finalDuration = 0L
-
-            if (_callType.value == CallLog.Calls.MISSED_TYPE) {
-                finalDuration = 0L
-            } else if (_callType.value == CallLog.Calls.INCOMING_TYPE && answer == 0L) {
-                // Was ringing but never answered
-                finalType = if (isUserTerminated) CallLog.Calls.REJECTED_TYPE else CallLog.Calls.MISSED_TYPE
-                finalDuration = 0L
-            } else if (answer > 0L) {
-                // Call was active
-                val actualElapsed = (endTime - answer) / 1000
-                // Use actual elapsed if it was user-terminated, otherwise use intended
-                finalDuration = if (isUserTerminated) actualElapsed else (intended ?: actualElapsed)
-            } else if (_callType.value == CallLog.Calls.OUTGOING_TYPE && answer == 0L) {
-                // Outgoing never answered
-                finalDuration = 0L
-            }
-
-            context?.let {
-                val helper = com.example.alibi.util.CallLogHelper.getInstance(it)
-                helper.insertCallLog(phoneNumber, finalDuration, finalStartTime, finalType, simHandle, features)
-            }
-            
-            // Reset everything
-            _startTime.value = 0
-            _answerTime.value = 0
-            _customStartTime.value = null
-            _intendedDuration.value = null
-            _mimicSimHandle.value = null
-            _callFeatures.value = 0
-            isUserTerminated = false
+        val feats = _callFeatures.value
+        
+        managerScope.launch {
+            recordCallEndInternal(context, number, start, answer, type, intended, simHandle, feats)
         }
     }
+
+    suspend fun terminateSimulatedSession(
+        context: Context,
+        phoneNumber: String,
+        startTime: Long,
+        answerTime: Long,
+        callType: Int,
+        intendedDuration: Long? = null,
+        simHandle: PhoneAccountHandle? = null,
+        features: Int = 0
+    ) {
+        Log.d(TAG, "Atomic termination started for $phoneNumber")
+        recordCallEndInternal(context, phoneNumber, startTime, answerTime, callType, intendedDuration, simHandle, features)
+        forceClearState(context)
+    }
+
+    private suspend fun recordCallEndInternal(
+        context: Context,
+        phoneNumber: String,
+        startTime: Long,
+        answerTime: Long,
+        callType: Int,
+        intendedDuration: Long?,
+        simHandle: PhoneAccountHandle?,
+        features: Int
+    ) = withContext(Dispatchers.IO + NonCancellable) {
+        Log.d(TAG, "Recording call log for $phoneNumber. Start: $startTime, Answer: $answerTime")
+
+        val endTime = System.currentTimeMillis()
+        var finalType = callType
+        var finalDuration = 0L
+
+        when {
+            callType == CallLog.Calls.MISSED_TYPE -> {
+                finalDuration = 0L
+            }
+            callType == CallLog.Calls.INCOMING_TYPE && answerTime == 0L -> {
+                finalType = if (isUserTerminated) CallLog.Calls.REJECTED_TYPE else CallLog.Calls.MISSED_TYPE
+                finalDuration = 0L
+            }
+            answerTime > 0L -> {
+                val actualElapsed = (endTime - answerTime) / 1000
+                finalDuration = if (isUserTerminated) actualElapsed else (intendedDuration ?: actualElapsed)
+            }
+            callType == CallLog.Calls.OUTGOING_TYPE && answerTime == 0L -> {
+                finalDuration = 0L
+            }
+        }
+
+        val helper = com.example.alibi.util.CallLogHelper.getInstance(context)
+        helper.insertCallLog(phoneNumber, finalDuration, startTime, finalType, simHandle, features)
+        Log.d(TAG, "Call log inserted successfully: $phoneNumber, dur: $finalDuration")
+    }
+
+    // --- UI Actions ---
 
     fun answer() {
         _currentCall.value?.answer(0)
         onAnswerRequested?.invoke()
     }
 
-    var onAnswerRequested: (() -> Unit)? = null
-
     fun disconnect() {
         isUserTerminated = true
         _currentCall.value?.disconnect()
         onDisconnectRequested?.invoke()
-        _isSimulatedCallActive.value = false
+        
         _callState.value = Call.STATE_DISCONNECTED
+        updateBusyState()
     }
 
-    fun toggleMute() {
-        val newMute = !_isMuted.value
-        onMuteRequested?.invoke(newMute)
+    /**
+     * Wipes all state. Called before new calls or on app reset.
+     */
+    fun forceClearState(context: Context) {
+        _currentCall.value = null
+        _callState.value = Call.STATE_DISCONNECTED
+        _isSimulatedCallActive.value = false
+        _isRealCall.value = false
+        _simulatedPhoneNumber.value = null
+        _startTime.value = 0
+        _answerTime.value = 0
+        _customStartTime.value = null
+        _intendedDuration.value = null
+        _mimicSimHandle.value = null
+        _callFeatures.value = 0
+        isUserTerminated = false
+        onAnswerRequested = null
+        onDisconnectRequested = null
+        onSpeakerRequested = null
+        onMuteRequested = null
+        
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+        nm.cancel(101) 
+        
+        updateBusyState()
     }
-
-    fun toggleSpeaker() {
-        val newSpeaker = !_speakerOn.value
-        onSpeakerRequested?.invoke(newSpeaker)
-    }
-
-    var onMuteRequested: ((Boolean) -> Unit)? = null
-    var onSpeakerRequested: ((Boolean) -> Unit)? = null
 
     fun updateAudioState(muted: Boolean, speaker: Boolean) {
         _isMuted.value = muted
         _speakerOn.value = speaker
     }
+
+    fun toggleMute() { onMuteRequested?.invoke(!_isMuted.value) }
+    fun toggleSpeaker() { onSpeakerRequested?.invoke(!_speakerOn.value) }
 }

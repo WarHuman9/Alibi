@@ -1,66 +1,40 @@
 package com.example.alibi.service
 
-import android.telecom.Call
-import android.telecom.Connection
-import android.telecom.ConnectionRequest
-import android.telecom.ConnectionService
-import android.telecom.PhoneAccountHandle
-import android.telecom.TelecomManager
-import android.provider.CallLog
-import android.os.Build
-import android.util.Log
-
 import android.content.Intent
+import android.os.Build
+import android.os.Bundle
+import android.provider.CallLog
+import android.telecom.*
+import android.util.Log
 import androidx.core.content.ContextCompat
 import com.example.alibi.telecom.CallStateManager
+import com.example.alibi.telecom.TelecomConstants.EXTRA_AUTO_ANSWER_DELAY
+import com.example.alibi.telecom.TelecomConstants.EXTRA_CALL_FEATURES
+import com.example.alibi.telecom.TelecomConstants.EXTRA_CALL_TYPE
+import com.example.alibi.telecom.TelecomConstants.EXTRA_CUSTOM_START_TIME
+import com.example.alibi.telecom.TelecomConstants.EXTRA_INTENDED_DURATION
+import com.example.alibi.telecom.TelecomConstants.EXTRA_MIMIC_SIM_HANDLE
 
+/**
+ * Service to handle simulated [Connection] creation.
+ * Unifies metadata extraction for both incoming and outgoing paths.
+ */
 class SimulatedConnectionService : ConnectionService() {
 
     override fun onCreateIncomingConnection(
         connectionManagerPhoneAccount: PhoneAccountHandle?,
         request: ConnectionRequest?
     ): Connection {
-        Log.d("SimulatedConnService", "onCreateIncomingConnection")
+        Log.d(TAG, "onCreateIncomingConnection")
         val connection = SimulatedConnection(this)
-        connection.setAddress(request?.address, TelecomManager.PRESENTATION_ALLOWED)
-        connection.setInitializing()
+        
+        setupConnection(connection, request)
         connection.setRinging()
-
-        val phoneNumber = request?.address?.schemeSpecificPart
-        val callType = request?.extras?.getInt("EXTRA_CALL_TYPE", CallLog.Calls.INCOMING_TYPE) 
-            ?: CallLog.Calls.INCOMING_TYPE
         
-        val customStartTime = request?.extras?.getLong("EXTRA_CUSTOM_START_TIME", -1L)?.takeIf { it != -1L }
-        val intendedDuration = request?.extras?.getLong("EXTRA_INTENDED_DURATION", -1L)?.takeIf { it != -1L }
-        val mimicSimHandle = if (Build.VERSION.SDK_INT >= 33) {
-            request?.extras?.getParcelable("EXTRA_MIMIC_SIM_HANDLE", PhoneAccountHandle::class.java)
-        } else {
-            @Suppress("DEPRECATION")
-            request?.extras?.getParcelable<PhoneAccountHandle>("EXTRA_MIMIC_SIM_HANDLE")
-        }
-        val callFeatures = request?.extras?.getInt("EXTRA_CALL_FEATURES", 0) ?: 0
+        val metadata = extractMetadata(request)
+        applyMetadata(connection, metadata, isIncoming = true)
         
-        CallStateManager.setCustomStartTime(customStartTime)
-        CallStateManager.setIntendedDuration(intendedDuration)
-        CallStateManager.setMimicSimHandle(mimicSimHandle)
-        CallStateManager.setCallFeatures(callFeatures)
-        
-        CallStateManager.setSimulatedCallActive(this, true, phoneNumber, Call.STATE_RINGING, type = callType)
-
-        if (callType == CallLog.Calls.MISSED_TYPE) {
-            val ringingTime = request?.extras?.getLong("EXTRA_INTENDED_DURATION", 20L)?.toInt() ?: 20
-            connection.setAutoMissDelay(ringingTime)
-        }
-
-        // Start notification service
-        val intent = Intent(this, CallNotificationService::class.java).apply {
-            putExtra(CallNotificationService.EXTRA_PHONE_NUMBER, phoneNumber)
-            putExtra(CallNotificationService.EXTRA_IS_INCOMING, true)
-            putExtra(CallNotificationService.EXTRA_IS_MISSED, callType == CallLog.Calls.MISSED_TYPE)
-            putExtra(CallNotificationService.EXTRA_IS_DIALING, false)
-            putExtra(CallNotificationService.EXTRA_IS_SIMULATED, true)
-        }
-        ContextCompat.startForegroundService(this, intent)
+        startNotification(metadata, isIncoming = true, isDialing = false)
 
         return connection
     }
@@ -69,68 +43,25 @@ class SimulatedConnectionService : ConnectionService() {
         connectionManagerPhoneAccount: PhoneAccountHandle?,
         request: ConnectionRequest?
     ) {
-        Log.e("SimulatedConnService", "onCreateIncomingConnectionFailed")
-        CallStateManager.setSimulatedCallActive(this, active = false)
+        Log.e(TAG, "onCreateIncomingConnectionFailed")
+        CallStateManager.forceClearState(this)
     }
 
     override fun onCreateOutgoingConnection(
         connectionManagerPhoneAccount: PhoneAccountHandle?,
         request: ConnectionRequest?
     ): Connection {
-        Log.d("SimulatedConnService", "onCreateOutgoingConnection")
+        Log.d(TAG, "onCreateOutgoingConnection")
         val connection = SimulatedConnection(this)
-        connection.setAddress(request?.address, TelecomManager.PRESENTATION_ALLOWED)
-        connection.setInitializing()
+        
+        setupConnection(connection, request)
         connection.setDialing()
         
-        val phoneNumber = request?.address?.schemeSpecificPart
-        val callType = request?.extras?.getInt("EXTRA_CALL_TYPE", CallLog.Calls.OUTGOING_TYPE)
-            ?: CallLog.Calls.OUTGOING_TYPE
-            
-        // 1. Update Manager state to DIALING first
-        val outgoingExtras = request?.extras?.getBundle(TelecomManager.EXTRA_OUTGOING_CALL_EXTRAS)
-        val customStartTime = outgoingExtras?.getLong("EXTRA_CUSTOM_START_TIME", -1L)?.takeIf { it != -1L }
-            ?: request?.extras?.getLong("EXTRA_CUSTOM_START_TIME", -1L).takeIf { it != -1L }
+        val metadata = extractMetadata(request)
+        applyMetadata(connection, metadata, isIncoming = false)
         
-        val intendedDuration = outgoingExtras?.getLong("EXTRA_INTENDED_DURATION", -1L)?.takeIf { it != -1L }
-            ?: request?.extras?.getLong("EXTRA_INTENDED_DURATION", -1L).takeIf { it != -1L }
-
-        val mimicSimHandle = if (Build.VERSION.SDK_INT >= 33) {
-            outgoingExtras?.getParcelable("EXTRA_MIMIC_SIM_HANDLE", PhoneAccountHandle::class.java)
-                ?: request?.extras?.getParcelable("EXTRA_MIMIC_SIM_HANDLE", PhoneAccountHandle::class.java)
-        } else {
-            @Suppress("DEPRECATION")
-            outgoingExtras?.getParcelable<PhoneAccountHandle>("EXTRA_MIMIC_SIM_HANDLE")
-                ?: @Suppress("DEPRECATION") request?.extras?.getParcelable<PhoneAccountHandle>("EXTRA_MIMIC_SIM_HANDLE")
-        }
-        
-        val callFeatures = outgoingExtras?.getInt("EXTRA_CALL_FEATURES", 0)
-            ?: request?.extras?.getInt("EXTRA_CALL_FEATURES", 0)
-            ?: 0
-
-        CallStateManager.setCustomStartTime(customStartTime)
-        CallStateManager.setIntendedDuration(intendedDuration)
-        CallStateManager.setMimicSimHandle(mimicSimHandle)
-        CallStateManager.setCallFeatures(callFeatures)
-        CallStateManager.setSimulatedCallActive(this, true, phoneNumber, Call.STATE_DIALING, type = callType)
-
-        // 2. Start the auto-answer delay (might trigger onAnswer immediately if delay is 0)
-        val autoAnswerDelay = outgoingExtras?.getInt("EXTRA_AUTO_ANSWER_DELAY", 0) 
-            ?: request?.extras?.getInt("EXTRA_AUTO_ANSWER_DELAY", 0) 
-            ?: 0
-        
-        Log.d("SimulatedConnService", "Starting outgoing call with delay: $autoAnswerDelay")
-        connection.setAutoAnswerDelay(autoAnswerDelay)
-
-        // 3. Start notification service (In DIALING state initially)
-        val intent = Intent(this, CallNotificationService::class.java).apply {
-            putExtra(CallNotificationService.EXTRA_PHONE_NUMBER, phoneNumber)
-            putExtra(CallNotificationService.EXTRA_IS_INCOMING, false)
-            putExtra(CallNotificationService.EXTRA_IS_MISSED, false)
-            putExtra(CallNotificationService.EXTRA_IS_DIALING, true)
-            putExtra(CallNotificationService.EXTRA_IS_SIMULATED, true)
-        }
-        ContextCompat.startForegroundService(this, intent)
+        connection.setAutoAnswerDelay(metadata.autoAnswerDelay)
+        startNotification(metadata, isIncoming = false, isDialing = true)
 
         return connection
     }
@@ -139,7 +70,94 @@ class SimulatedConnectionService : ConnectionService() {
         connectionManagerPhoneAccount: PhoneAccountHandle?,
         request: ConnectionRequest?
     ) {
-        Log.e("SimulatedConnService", "onCreateOutgoingConnectionFailed")
-        CallStateManager.setSimulatedCallActive(this, active = false)
+        Log.e(TAG, "onCreateOutgoingConnectionFailed")
+        CallStateManager.forceClearState(this)
+    }
+
+    // --- Private Helpers ---
+
+    private fun setupConnection(connection: Connection, request: ConnectionRequest?) {
+        connection.setAddress(request?.address, TelecomManager.PRESENTATION_ALLOWED)
+        connection.setInitializing()
+    }
+
+    private fun extractMetadata(request: ConnectionRequest?): CallMetadata {
+        val extras = request?.extras ?: Bundle.EMPTY
+        val outgoingExtras = extras.getBundle(TelecomManager.EXTRA_OUTGOING_CALL_EXTRAS) ?: Bundle.EMPTY
+        
+        // Merge top-level and nested extras (support various OEM behaviors)
+        return CallMetadata(
+            phoneNumber = request?.address?.schemeSpecificPart ?: "Unknown",
+            callType = extras.getInt(EXTRA_CALL_TYPE, CallLog.Calls.INCOMING_TYPE),
+            startTime = extras.getLong(EXTRA_CUSTOM_START_TIME, -1L).takeIf { it != -1L }
+                ?: outgoingExtras.getLong(EXTRA_CUSTOM_START_TIME, -1L).takeIf { it != -1L },
+            duration = extras.getLong(EXTRA_INTENDED_DURATION, -1L).takeIf { it != -1L }
+                ?: outgoingExtras.getLong(EXTRA_INTENDED_DURATION, -1L).takeIf { it != -1L },
+            simHandle = getPhoneAccountHandle(extras, outgoingExtras),
+            features = extras.getInt(EXTRA_CALL_FEATURES, 0).takeIf { it != 0 }
+                ?: outgoingExtras.getInt(EXTRA_CALL_FEATURES, 0),
+            autoAnswerDelay = extras.getInt(EXTRA_AUTO_ANSWER_DELAY, 0).takeIf { it != 0 }
+                ?: outgoingExtras.getInt(EXTRA_AUTO_ANSWER_DELAY, 0)
+        )
+    }
+
+    private fun getPhoneAccountHandle(extras: Bundle, nested: Bundle): PhoneAccountHandle? {
+        return if (Build.VERSION.SDK_INT >= 33) {
+            extras.getParcelable(EXTRA_MIMIC_SIM_HANDLE, PhoneAccountHandle::class.java)
+                ?: nested.getParcelable(EXTRA_MIMIC_SIM_HANDLE, PhoneAccountHandle::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            extras.getParcelable(EXTRA_MIMIC_SIM_HANDLE)
+                ?: @Suppress("DEPRECATION") nested.getParcelable(EXTRA_MIMIC_SIM_HANDLE)
+        }
+    }
+
+    private fun applyMetadata(connection: SimulatedConnection, data: CallMetadata, isIncoming: Boolean) {
+        connection.setMetadata(
+            number = data.phoneNumber,
+            startTime = data.startTime ?: System.currentTimeMillis(),
+            type = data.callType,
+            duration = data.duration,
+            sim = data.simHandle,
+            features = data.features
+        )
+
+        CallStateManager.setCustomStartTime(data.startTime)
+        CallStateManager.setIntendedDuration(data.duration)
+        CallStateManager.setMimicSimHandle(data.simHandle)
+        CallStateManager.setCallFeatures(data.features)
+        
+        val state = if (isIncoming) Call.STATE_RINGING else Call.STATE_DIALING
+        CallStateManager.setSimulatedCallActive(this, true, data.phoneNumber, state, data.callType)
+        
+        if (data.callType == CallLog.Calls.MISSED_TYPE) {
+            val ringingTime = data.duration?.toInt() ?: 20
+            connection.setAutoMissDelay(ringingTime)
+        }
+    }
+
+    private fun startNotification(data: CallMetadata, isIncoming: Boolean, isDialing: Boolean) {
+        val intent = Intent(this, CallNotificationService::class.java).apply {
+            putExtra(CallNotificationService.EXTRA_PHONE_NUMBER, data.phoneNumber)
+            putExtra(CallNotificationService.EXTRA_IS_INCOMING, isIncoming)
+            putExtra(CallNotificationService.EXTRA_IS_MISSED, data.callType == CallLog.Calls.MISSED_TYPE)
+            putExtra(CallNotificationService.EXTRA_IS_DIALING, isDialing)
+            putExtra(CallNotificationService.EXTRA_IS_SIMULATED, true)
+        }
+        ContextCompat.startForegroundService(this, intent)
+    }
+
+    private data class CallMetadata(
+        val phoneNumber: String,
+        val callType: Int,
+        val startTime: Long?,
+        val duration: Long?,
+        val simHandle: PhoneAccountHandle?,
+        val features: Int,
+        val autoAnswerDelay: Int
+    )
+
+    companion object {
+        private const val TAG = "SimulatedConnService"
     }
 }

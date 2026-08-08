@@ -1,40 +1,29 @@
 package com.example.alibi.ui.screens
 
 import android.app.Activity
-import android.app.role.RoleManager
 import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.provider.CallLog
+import android.telecom.PhoneAccountHandle
 import android.telecom.TelecomManager
 import android.text.format.DateFormat
 import androidx.activity.compose.ReportDrawnWhen
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.IntrinsicSize
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.*
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Call
-import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -47,18 +36,19 @@ import com.example.alibi.telecom.CallStateManager
 import com.example.alibi.telecom.TelecomHelper
 import com.example.alibi.util.CallLogHelper
 import com.example.alibi.util.RoleHelper
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
-import java.util.Calendar
-import java.util.Date
-import java.util.Locale
-import java.util.TimeZone
+import java.util.*
 
+/**
+ * Main Setup/Simulate screen. Configures parameters for new simulated calls.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SetupScreen(
-    onNavigateToCall: (String) -> Unit,
-) {
+fun SetupScreen(onNavigateToCall: (String) -> Unit) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val telecomHelper = remember { TelecomHelper(context) }
     val callLogHelper = remember { CallLogHelper.getInstance(context) }
     val is24Hour = remember(context) { DateFormat.is24HourFormat(context) }
@@ -66,90 +56,79 @@ fun SetupScreen(
     val isBusy by CallStateManager.isBusy.collectAsStateWithLifecycle()
     val busyMessage by CallStateManager.busyMessage.collectAsStateWithLifecycle()
     
-    // Signal fully drawn once SetupScreen is composed
     ReportDrawnWhen { true }
     
-    // Main States
+    // --- Main States ---
     var phoneNumber by rememberSaveable { mutableStateOf("") }
     var isDialerHeld by remember { mutableStateOf(RoleHelper.isDialerRoleHeld(context)) }
     var callDirection by rememberSaveable { mutableIntStateOf(CallLog.Calls.INCOMING_TYPE) }
     var durationSeconds by rememberSaveable { mutableStateOf("60") }
     var autoAnswerDelay by rememberSaveable { mutableStateOf("5") }
 
-    // Advanced Metadata States
-    var showAdvanced by rememberSaveable { mutableStateOf(value = false) }
-    var networkType by rememberSaveable { mutableIntStateOf(0) } // 0: Standard, 1: HD/5G
+    // Advanced Metadata
+    var showAdvanced by rememberSaveable { mutableStateOf(false) }
+    var networkType by rememberSaveable { mutableIntStateOf(0) } // 0: Std, 1: HD
     var callTypeMetadata by rememberSaveable { mutableIntStateOf(0) } // 0: Voice, 1: Video
-    var callOrigin by rememberSaveable { mutableIntStateOf(0) } // 0: Cellular, 1: WiFi
+    var callOrigin by rememberSaveable { mutableIntStateOf(0) } // 0: Cell, 1: WiFi
 
-    val simAccounts = remember { telecomHelper.getCallCapableSims() }
-    var selectedSim by remember { 
-        mutableStateOf(
-            simAccounts.find { it.handle.id == telecomHelper.getPreferredSimId() } 
-            ?: simAccounts.firstOrNull()
-        )
-    }
+    // SIM Selection
+    val simAccounts = remember { mutableStateListOf<TelecomHelper.SimAccount>() }
+    var selectedSim by remember { mutableStateOf<TelecomHelper.SimAccount?>(null) }
 
-    // Date/Time States
+    // --- Live Timing logic ---
+    var isTimeManuallySet by rememberSaveable { mutableStateOf(false) }
+    var selectedSeconds by rememberSaveable { mutableIntStateOf(Calendar.getInstance().get(Calendar.SECOND)) }
+
     val datePickerState = rememberDatePickerState(initialSelectedDateMillis = System.currentTimeMillis())
     val timePickerState = rememberTimePickerState(
         initialHour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY),
         initialMinute = Calendar.getInstance().get(Calendar.MINUTE),
         is24Hour = is24Hour
     )
-    var showDatePicker by remember { mutableStateOf(false) }
-    var showTimePicker by remember { mutableStateOf(false) }
 
-    // Static Data
-    val directions = remember {
-        listOf(
-            "Incoming" to CallLog.Calls.INCOMING_TYPE,
-            "Outgoing" to CallLog.Calls.OUTGOING_TYPE,
-            "Missed" to CallLog.Calls.MISSED_TYPE
-        )
-    }
-
-    val activeColor = MaterialTheme.colorScheme.primary // Using primary which is usually dark blue in default M3
-
-    // Formatters
-    val dateFormatter = remember { SimpleDateFormat("MMM dd, yyyy", Locale.getDefault()) }
-    val timeFormatter = remember(is24Hour) { 
-        SimpleDateFormat(if (is24Hour) "HH:mm" else "hh:mm a", Locale.getDefault()) 
-    }
-
-    // Derived UI State
-    val selectedDateText by remember {
-        derivedStateOf {
-            datePickerState.selectedDateMillis?.let { dateFormatter.format(Date(it)) } ?: "Select Date"
-        }
-    }
-
-    val selectedTimeText by remember {
-        derivedStateOf {
-            val cal = Calendar.getInstance().apply {
-                set(Calendar.HOUR_OF_DAY, timePickerState.hour)
-                set(Calendar.MINUTE, timePickerState.minute)
+    LaunchedEffect(isTimeManuallySet) {
+        if (!isTimeManuallySet) {
+            while (true) {
+                val now = Calendar.getInstance()
+                datePickerState.selectedDateMillis = now.timeInMillis
+                timePickerState.hour = now.get(Calendar.HOUR_OF_DAY)
+                timePickerState.minute = now.get(Calendar.MINUTE)
+                selectedSeconds = now.get(Calendar.SECOND)
+                delay(1000)
             }
-            timeFormatter.format(cal.time)
         }
     }
 
-    fun getSelectedTimestamp(): Long {
-        val dateMillis = datePickerState.selectedDateMillis ?: System.currentTimeMillis()
-        val dateCalendar = Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply {
-            timeInMillis = dateMillis
+    // --- Lifecycle Sync ---
+    val lifecycleState by androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsStateWithLifecycle()
+    LaunchedEffect(lifecycleState) {
+        isDialerHeld = RoleHelper.isDialerRoleHeld(context)
+        val accounts = telecomHelper.getCallCapableSims()
+        simAccounts.clear()
+        simAccounts.addAll(accounts)
+        if (selectedSim == null) {
+            selectedSim = simAccounts.find { it.handle.id == telecomHelper.getPreferredSimId() } ?: simAccounts.firstOrNull()
         }
-        
-        return Calendar.getInstance().apply {
-            set(Calendar.YEAR, dateCalendar.get(Calendar.YEAR))
-            set(Calendar.MONTH, dateCalendar.get(Calendar.MONTH))
-            set(Calendar.DAY_OF_MONTH, dateCalendar.get(Calendar.DAY_OF_MONTH))
-            set(Calendar.HOUR_OF_DAY, timePickerState.hour)
-            set(Calendar.MINUTE, timePickerState.minute)
-            set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
-        }.timeInMillis
+
+        // Automatic Network Detection (Smart Defaults)
+        if (lifecycleState == androidx.lifecycle.Lifecycle.State.RESUMED) {
+            val snapshot = telecomHelper.getNetworkSnapshot()
+            if (!showAdvanced) {
+                networkType = if (snapshot.isHdCapable) 1 else 0
+                callOrigin = if (snapshot.isWifiCallingActive) 1 else 0
+            }
+        }
     }
+
+    // --- Internal Helpers ---
+    fun getSelectedTimestamp(): Long = Calendar.getInstance().apply {
+        val dateCal = Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply {
+            timeInMillis = datePickerState.selectedDateMillis ?: System.currentTimeMillis()
+        }
+        set(dateCal.get(Calendar.YEAR), dateCal.get(Calendar.MONTH), dateCal.get(Calendar.DAY_OF_MONTH),
+            timePickerState.hour, timePickerState.minute, selectedSeconds)
+        set(Calendar.MILLISECOND, 0)
+    }.timeInMillis
 
     fun getFeatureFlags(): Int {
         var flags = 0
@@ -161,247 +140,125 @@ fun SetupScreen(
         return flags
     }
 
-    // Register PhoneAccount on composition
-    LaunchedEffect(Unit) {
-        telecomHelper.registerPhoneAccount()
-    }
-
-    val roleLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.StartActivityForResult()
-    ) { _ ->
+    // --- UI Logic ---
+    var showDatePicker by remember { mutableStateOf(false) }
+    var showTimePicker by remember { mutableStateOf(false) }
+    val roleLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         isDialerHeld = RoleHelper.isDialerRoleHeld(context)
     }
 
-    // Dialogs isolated from main scroll performance
+    // Dialog Rendering
     if (showDatePicker) {
-        DatePickerDialog(
-            onDismissRequest = { showDatePicker = false },
-            confirmButton = {
-                TextButton(onClick = { showDatePicker = false }) {
-                    Text("OK")
-                }
-            }
-        ) {
+        DatePickerDialog(onDismissRequest = { showDatePicker = false }, confirmButton = { TextButton(onClick = { showDatePicker = false }) { Text("OK") } }) {
             DatePicker(state = datePickerState)
         }
     }
-
     if (showTimePicker) {
-        TimePickerDialog(
-            state = timePickerState,
-            onDismiss = { showTimePicker = false },
-            onConfirm = {
-                showTimePicker = false
-            },
-        )
+        TimePickerDialog(state = timePickerState, onDismiss = { showTimePicker = false }, onConfirm = { showTimePicker = false })
     }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         floatingActionButton = {
             if (isDialerHeld && phoneNumber.isNotBlank()) {
-                StartCallFAB(
-                    enabled = !isBusy,
-                    onClick = {
-                        val customTime = getSelectedTimestamp()
-                        val duration = durationSeconds.toLongOrNull() ?: 60L
-                        val features = getFeatureFlags()
-                        if (callDirection == CallLog.Calls.OUTGOING_TYPE) {
-                            telecomHelper.startOutgoingCall(
-                                phoneNumber = phoneNumber,
-                                autoAnswerDelay = autoAnswerDelay.toIntOrNull() ?: 0,
-                                customStartTime = customTime,
-                                durationSeconds = duration,
-                                mimicSimHandle = selectedSim?.handle,
-                                features = features
-                            )
-                        } else {
-                            telecomHelper.startIncomingCall(
-                                phoneNumber = phoneNumber,
-                                callType = callDirection,
-                                customStartTime = customTime,
-                                durationSeconds = duration,
-                                mimicSimHandle = selectedSim?.handle,
-                                features = features
-                            )
-                        }
-                        onNavigateToCall(phoneNumber)
+                StartCallFAB(enabled = !isBusy) {
+                    val customTime = getSelectedTimestamp()
+                    val duration = durationSeconds.toLongOrNull() ?: 60L
+                    val features = getFeatureFlags()
+                    if (callDirection == CallLog.Calls.OUTGOING_TYPE) {
+                        telecomHelper.startOutgoingCall(phoneNumber, autoAnswerDelay.toIntOrNull() ?: 0, customTime, duration, selectedSim?.handle, features)
+                    } else {
+                        telecomHelper.startIncomingCall(phoneNumber, callDirection, customTime, duration, selectedSim?.handle, features)
                     }
-                )
+                    onNavigateToCall(phoneNumber)
+                }
             }
         }
-    ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .padding(innerPadding)
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 24.dp, vertical = 0.dp), // Removed vertical padding
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
+    ) { padding ->
+        Column(modifier = Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp)) {
             SetupHeader()
 
-            if (isBusy && busyMessage != null) {
-                Card(
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer,
-                        contentColor = MaterialTheme.colorScheme.onErrorContainer
-                    ),
-                    modifier = Modifier.padding(vertical = 8.dp).fillMaxWidth()
-                ) {
-                    Row(
-                        modifier = Modifier.padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Rounded.History, contentDescription = null, modifier = Modifier.size(20.dp))
-                        Spacer(Modifier.width(12.dp))
-                        Text(busyMessage!!, style = MaterialTheme.typography.bodySmall)
-                    }
-                }
+            if (isBusy && busyMessage != null) BusyBanner(busyMessage!!)
+
+            Spacer(Modifier.height(4.dp))
+
+            SectionTitle("Call Direction")
+            DirectionPicker(current = callDirection, onSelected = { callDirection = it })
+
+            Spacer(Modifier.height(8.dp))
+
+            if (simAccounts.isNotEmpty()) {
+                SectionTitle("SIM Identity")
+                SimPicker(accounts = simAccounts, selected = selectedSim, onSelected = { 
+                    selectedSim = it
+                    telecomHelper.setPreferredSimId(it.handle.id)
+                })
+                Spacer(Modifier.height(8.dp))
             }
 
-            Spacer(modifier = Modifier.height(4.dp)) // Minimum spacer
+            PhoneNumberField(value = phoneNumber, onValueChange = { phoneNumber = it })
 
-            // Call Direction Segmented Button
-            Text(
-                text = "Call Direction",
-                style = MaterialTheme.typography.labelSmall, // Shrunk
-                modifier = Modifier.fillMaxWidth(),
-                color = MaterialTheme.colorScheme.primary
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-                        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                directions.forEachIndexed { index, (label, value) ->
-                    SegmentedButton(
-                        selected = callDirection == value,
-                        onClick = { callDirection = value },
-                        shape = SegmentedButtonDefaults.itemShape(index = index, count = directions.size),
-                        colors = SegmentedButtonDefaults.colors(
-                            activeContainerColor = activeColor.copy(alpha = 0.15f),
-                            activeContentColor = activeColor,
-                            activeBorderColor = activeColor,
-                            inactiveContentColor = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    ) {
-                        Text(label)
-                    }
-                }
-            }
-
-        Spacer(modifier = Modifier.height(8.dp)) // Reduced
-
-        // SIM Identity Segmented Button
-        if (simAccounts.isNotEmpty()) {
-            Text(
-                text = "SIM Identity",
-                style = MaterialTheme.typography.labelSmall, // Shrunk
-                modifier = Modifier.fillMaxWidth(),
-                color = MaterialTheme.colorScheme.primary
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-                        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                simAccounts.forEachIndexed { index, sim ->
-                    SegmentedButton(
-                        selected = selectedSim?.handle?.id == sim.handle.id,
-                        onClick = { 
-                            selectedSim = sim
-                            telecomHelper.setPreferredSimId(sim.handle.id)
-                        },
-                        shape = SegmentedButtonDefaults.itemShape(index = index, count = simAccounts.size),
-                        colors = SegmentedButtonDefaults.colors(
-                            activeContainerColor = activeColor.copy(alpha = 0.15f),
-                            activeContentColor = activeColor,
-                            activeBorderColor = activeColor,
-                            inactiveContentColor = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(sim.label.take(8))
-                            sim.address?.let {
-                                Text(
-                                    text = it,
-                                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 7.sp),
-                                    color = if (selectedSim?.handle?.id == sim.handle.id) activeColor else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-            Spacer(modifier = Modifier.height(8.dp)) // Reduced
-        }
-
-            PhoneNumberField(
-                value = phoneNumber,
-                onValueChange = { phoneNumber = it }
-            )
-
-            Spacer(modifier = Modifier.height(8.dp)) // Reduced
+            Spacer(Modifier.height(8.dp))
 
             DurationFields(
-                durationSeconds = durationSeconds,
-                onDurationChange = { durationSeconds = it },
-                showAutoAnswer = (callDirection == CallLog.Calls.OUTGOING_TYPE),
-                autoAnswerDelay = autoAnswerDelay,
-                onAutoAnswerChange = { autoAnswerDelay = it },
+                duration = durationSeconds, onDurationChange = { durationSeconds = it },
+                showDelay = (callDirection == CallLog.Calls.OUTGOING_TYPE),
+                delay = autoAnswerDelay, onDelayChange = { autoAnswerDelay = it },
                 isMissed = (callDirection == CallLog.Calls.MISSED_TYPE)
             )
 
-            Spacer(modifier = Modifier.height(12.dp)) // Reduced
-            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+            Spacer(Modifier.height(12.dp))
+            HorizontalDivider(Modifier.padding(vertical = 4.dp))
+            
+            val dateFormatter = remember { SimpleDateFormat("MMM dd, yyyy", Locale.getDefault()) }
+            val timeFormatter = remember(is24Hour) { SimpleDateFormat(if (is24Hour) "HH:mm" else "hh:mm a", Locale.getDefault()) }
             
             CustomStartTimeSection(
-                dateText = selectedDateText,
-                timeText = selectedTimeText,
-                onShowDatePicker = { showDatePicker = true },
-                onShowTimePicker = { showTimePicker = true }
+                dateText = datePickerState.selectedDateMillis?.let { dateFormatter.format(Date(it)) } ?: "Select Date",
+                timeText = Calendar.getInstance().apply { set(Calendar.HOUR_OF_DAY, timePickerState.hour); set(Calendar.MINUTE, timePickerState.minute) }.let { timeFormatter.format(it.time) },
+                seconds = selectedSeconds,
+                onSecondsChange = { selectedSeconds = it; isTimeManuallySet = true },
+                onShowDatePicker = { showDatePicker = true; isTimeManuallySet = true },
+                onShowTimePicker = { showTimePicker = true; isTimeManuallySet = true },
+                onRefresh = {
+                    isTimeManuallySet = false
+                    val now = Calendar.getInstance()
+                    datePickerState.selectedDateMillis = now.timeInMillis
+                    timePickerState.hour = now.get(Calendar.HOUR_OF_DAY)
+                    timePickerState.minute = now.get(Calendar.MINUTE)
+                    selectedSeconds = now.get(Calendar.SECOND)
+                    scope.launch { simAccounts.clear(); simAccounts.addAll(telecomHelper.getCallCapableSims()) }
+                }
             )
 
-            Spacer(modifier = Modifier.height(8.dp)) // Reduced
-            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+            Spacer(Modifier.height(8.dp))
+            HorizontalDivider(Modifier.padding(vertical = 4.dp))
 
             AdvancedDetailsSection(
                 expanded = showAdvanced,
-                onExpandedChange = { enabled ->
-                    showAdvanced = enabled
-                    if (enabled) {
-                        val snapshot = telecomHelper.getNetworkSnapshot()
-                        networkType = if (snapshot.isHdCapable) 1 else 0
-                        callOrigin = if (snapshot.isWifiCallingActive) 1 else 0
-                        callTypeMetadata = 0 // Default to Voice
+                onExpandedChange = { expanded ->
+                    showAdvanced = expanded
+                    if (expanded) {
+                        val snap = telecomHelper.getNetworkSnapshot()
+                        networkType = if (snap.isHdCapable) 1 else 0
+                        callOrigin = if (snap.isWifiCallingActive) 1 else 0
                     }
                 },
-                networkType = networkType,
-                onNetworkChange = { networkType = it },
-                callType = callTypeMetadata,
-                onCallTypeChange = { callTypeMetadata = it },
-                origin = callOrigin,
-                onOriginChange = { callOrigin = it }
+                networkType = networkType, onNetworkChange = { networkType = it },
+                callType = callTypeMetadata, onCallTypeChange = { callTypeMetadata = it },
+                origin = callOrigin, onOriginChange = { callOrigin = it }
             )
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(Modifier.height(8.dp))
 
             DialerRoleSection(
                 isDialerHeld = isDialerHeld,
-                onRequestRole = {
-                    val activity = context as? Activity
-                    if (activity != null) {
-                        requestRole(activity, roleLauncher)
-                    }
-                },
+                onRequestRole = { (context as? Activity)?.let { requestDialerRole(it, roleLauncher) } },
                 onRegisterOnly = {
-                    val duration = durationSeconds.toLongOrNull() ?: 0L
-                    val timestamp = getSelectedTimestamp()
-                    val features = getFeatureFlags()
-                    callLogHelper.insertCallLog(
-                        phoneNumber = phoneNumber,
-                        duration = duration,
-                        timestamp = timestamp,
-                        callType = callDirection,
-                        simHandle = selectedSim?.handle,
-                        features = features
-                    )
-                    android.widget.Toast.makeText(context, "Call registered in log", android.widget.Toast.LENGTH_SHORT).show()
+                    scope.launch {
+                        callLogHelper.insertCallLog(phoneNumber, durationSeconds.toLongOrNull() ?: 0L, getSelectedTimestamp(), callDirection, selectedSim?.handle, getFeatureFlags())
+                        android.widget.Toast.makeText(context, "Call registered in log", android.widget.Toast.LENGTH_SHORT).show()
+                    }
                 },
                 canRegister = phoneNumber.isNotBlank()
             )
@@ -409,371 +266,181 @@ fun SetupScreen(
     }
 }
 
+// --- Sub-Components ---
+
 @Composable
 private fun SetupHeader() {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(
-            text = "Simulate Call",
-            style = MaterialTheme.typography.headlineLarge.copy(
-                fontWeight = FontWeight.Bold
-            ),
-            color = MaterialTheme.colorScheme.onBackground
-        )
-    }
+    Text("Simulate Call", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 8.dp))
 }
 
 @Composable
-private fun PhoneNumberField(value: String, onValueChange: (String) -> Unit) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = onValueChange,
-        label = { Text("Phone Number") },
-        placeholder = { Text("e.g. +1234567890") },
-        modifier = Modifier.fillMaxWidth(),
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
-        singleLine = true,
-        shape = MaterialTheme.shapes.large
-    )
-}
-
-@Composable
-private fun DurationFields(
-    durationSeconds: String,
-    onDurationChange: (String) -> Unit,
-    showAutoAnswer: Boolean,
-    autoAnswerDelay: String,
-    onAutoAnswerChange: (String) -> Unit,
-    isMissed: Boolean = false
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        OutlinedTextField(
-            value = durationSeconds,
-            onValueChange = onDurationChange,
-            label = { Text(if (isMissed) "Ringing Time" else "Duration") },
-            modifier = Modifier.weight(1f),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            singleLine = true,
-            shape = MaterialTheme.shapes.large,
-            placeholder = { if (isMissed) Text("sec") }
-        )
-
-        if (showAutoAnswer) {
-            OutlinedTextField(
-                value = autoAnswerDelay,
-                onValueChange = onAutoAnswerChange,
-                label = { Text("Delay") },
-                modifier = Modifier.weight(1f),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                singleLine = true,
-                shape = MaterialTheme.shapes.large
-            )
+private fun BusyBanner(message: String) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer, contentColor = MaterialTheme.colorScheme.onErrorContainer), modifier = Modifier.padding(vertical = 8.dp).fillMaxWidth()) {
+        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Rounded.History, contentDescription = null, Modifier.size(20.dp))
+            Spacer(Modifier.width(12.dp))
+            Text(message, style = MaterialTheme.typography.bodySmall)
         }
     }
 }
 
 @Composable
-private fun CustomStartTimeSection(
-    dateText: String,
-    timeText: String,
-    onShowDatePicker: () -> Unit,
-    onShowTimePicker: () -> Unit
-) {
-    Column {
-        Text(
-            text = "Call Start Time",
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.primary
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            OutlinedButton(
-                onClick = onShowDatePicker,
-                modifier = Modifier.weight(1f),
-                shape = MaterialTheme.shapes.medium
-            ) {
-                Text(dateText)
-            }
-            OutlinedButton(
-                onClick = onShowTimePicker,
-                modifier = Modifier.weight(1f),
-                shape = MaterialTheme.shapes.medium
-            ) {
-                Text(timeText)
-            }
-        }
-    }
+private fun SectionTitle(text: String) {
+    Text(text, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp))
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun AdvancedDetailsSection(
-    expanded: Boolean,
-    onExpandedChange: (Boolean) -> Unit,
-    networkType: Int,
-    onNetworkChange: (Int) -> Unit,
-    callType: Int,
-    onCallTypeChange: (Int) -> Unit,
-    origin: Int,
-    onOriginChange: (Int) -> Unit
-) {
-    // Constraint Logic
-    val isStandardNetwork = networkType == 0
-    val isWifiOrigin = origin == 1
-    val isVideoCall = callType == 1
-    val activeColor = MaterialTheme.colorScheme.primary
-
-    // If WiFi or Video is selected, Network must be HD (1).
-    // If Network is Standard (0), WiFi and Video must be disabled.
-    
-    Column {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable { onExpandedChange(!expanded) },
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(
-                text = "Advanced Details",
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.Medium
-            )
-            Switch(
-                checked = expanded,
-                onCheckedChange = onExpandedChange
-            )
-        }
-
-        if (expanded) {
-            Spacer(modifier = Modifier.height(16.dp))
-            
-            // Network Type
-            Text("Network Type", style = MaterialTheme.typography.labelSmall)
-            Spacer(Modifier.height(4.dp))
-            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                val standardEnabled = !isWifiOrigin && !isVideoCall
-                SegmentedButton(
-                    selected = networkType == 0,
-                    onClick = { onNetworkChange(0) },
-                    shape = SegmentedButtonDefaults.itemShape(0, 2),
-                    enabled = standardEnabled,
-                    colors = SegmentedButtonDefaults.colors(
-                        activeContainerColor = activeColor.copy(alpha = 0.15f),
-                        activeContentColor = activeColor,
-                        activeBorderColor = activeColor,
-                        inactiveContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                        disabledInactiveContentColor = Color.Gray.copy(alpha = 0.5f),
-                        disabledInactiveBorderColor = Color.LightGray.copy(alpha = 0.5f)
-                    )
-                ) { Text("Standard") }
-                SegmentedButton(
-                    selected = networkType == 1,
-                    onClick = { onNetworkChange(1) },
-                    shape = SegmentedButtonDefaults.itemShape(1, 2),
-                    colors = SegmentedButtonDefaults.colors(
-                        activeContainerColor = activeColor.copy(alpha = 0.15f),
-                        activeContentColor = activeColor,
-                        activeBorderColor = activeColor,
-                        inactiveContentColor = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                ) { Text("HD/5G") }
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Call Type
-            Text("Call Type", style = MaterialTheme.typography.labelSmall)
-            Spacer(Modifier.height(4.dp))
-            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                SegmentedButton(
-                    selected = callType == 0,
-                    onClick = { onCallTypeChange(0) },
-                    shape = SegmentedButtonDefaults.itemShape(0, 2),
-                    colors = SegmentedButtonDefaults.colors(
-                        activeContainerColor = activeColor.copy(alpha = 0.15f),
-                        activeContentColor = activeColor,
-                        activeBorderColor = activeColor,
-                        inactiveContentColor = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                ) { Text("Voice") }
-                SegmentedButton(
-                    selected = callType == 1,
-                    onClick = { 
-                        onCallTypeChange(1)
-                        onNetworkChange(1) // Force HD
-                    },
-                    shape = SegmentedButtonDefaults.itemShape(1, 2),
-                    enabled = !isStandardNetwork,
-                    colors = SegmentedButtonDefaults.colors(
-                        activeContainerColor = activeColor.copy(alpha = 0.15f),
-                        activeContentColor = activeColor,
-                        activeBorderColor = activeColor,
-                        inactiveContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                        disabledInactiveContentColor = Color.Gray.copy(alpha = 0.5f),
-                        disabledInactiveBorderColor = Color.LightGray.copy(alpha = 0.5f)
-                    )
-                ) { Text("Video") }
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Call Origin
-            Text("Call Origin", style = MaterialTheme.typography.labelSmall)
-            Spacer(Modifier.height(4.dp))
-            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                SegmentedButton(
-                    selected = origin == 0,
-                    onClick = { onOriginChange(0) },
-                    shape = SegmentedButtonDefaults.itemShape(0, 2),
-                    colors = SegmentedButtonDefaults.colors(
-                        activeContainerColor = activeColor.copy(alpha = 0.15f),
-                        activeContentColor = activeColor,
-                        activeBorderColor = activeColor,
-                        inactiveContentColor = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                ) { Text("Cellular") }
-                SegmentedButton(
-                    selected = origin == 1,
-                    onClick = { 
-                        onOriginChange(1)
-                        onNetworkChange(1) // Force HD
-                    },
-                    shape = SegmentedButtonDefaults.itemShape(1, 2),
-                    enabled = !isStandardNetwork,
-                    colors = SegmentedButtonDefaults.colors(
-                        activeContainerColor = activeColor.copy(alpha = 0.15f),
-                        activeContentColor = activeColor,
-                        activeBorderColor = activeColor,
-                        inactiveContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                        disabledInactiveContentColor = Color.Gray.copy(alpha = 0.5f),
-                        disabledInactiveBorderColor = Color.LightGray.copy(alpha = 0.5f)
-                    )
-                ) { Text("WiFi") }
-            }
+private fun DirectionPicker(current: Int, onSelected: (Int) -> Unit) {
+    val directions = listOf("Incoming" to CallLog.Calls.INCOMING_TYPE, "Outgoing" to CallLog.Calls.OUTGOING_TYPE, "Missed" to CallLog.Calls.MISSED_TYPE)
+    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+        directions.forEachIndexed { index, (label, value) ->
+            SegmentedButton(
+                selected = current == value, onClick = { onSelected(value) },
+                shape = SegmentedButtonDefaults.itemShape(index, directions.size),
+                colors = segmentedColors()
+            ) { Text(label) }
         }
     }
 }
 
 @Composable
-private fun DialerRoleSection(
-    isDialerHeld: Boolean,
-    onRequestRole: () -> Unit,
-    onRegisterOnly: () -> Unit,
-    canRegister: Boolean
-) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        if (!isDialerHeld) {
-            Button(
-                onClick = onRequestRole,
-                modifier = Modifier.fillMaxWidth(),
-                shape = MaterialTheme.shapes.medium
+private fun SimPicker(accounts: List<TelecomHelper.SimAccount>, selected: TelecomHelper.SimAccount?, onSelected: (TelecomHelper.SimAccount) -> Unit) {
+    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+        accounts.forEachIndexed { index, sim ->
+            SegmentedButton(
+                selected = selected?.handle?.id == sim.handle.id, onClick = { onSelected(sim) },
+                shape = SegmentedButtonDefaults.itemShape(index, accounts.size),
+                colors = segmentedColors()
             ) {
-                Text("Set as Default Dialer")
-            }
-        } else {
-            OutlinedButton(
-                onClick = onRegisterOnly,
-                modifier = Modifier.fillMaxWidth(),
-                enabled = canRegister,
-                shape = MaterialTheme.shapes.medium
-            ) {
-                Icon(Icons.Rounded.History, contentDescription = null)
-                Spacer(Modifier.width(8.dp))
-                Text("Register Only")
-            }
-        }
-        
-        Spacer(modifier = Modifier.height(24.dp))
-        
-        Text(
-            text = if (isDialerHeld) "App is ready to handle calls" else "App needs dialer role to simulate calls",
-            color = if (isDialerHeld) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-            style = MaterialTheme.typography.bodyMedium
-        )
-        
-        Spacer(modifier = Modifier.height(16.dp)) // Reduced bottom padding
-    }
-}
-
-@Composable
-private fun StartCallFAB(enabled: Boolean, onClick: () -> Unit) {
-    LargeFloatingActionButton(
-        onClick = { if (enabled) onClick() },
-        containerColor = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
-        contentColor = if (enabled) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
-    ) {
-        Icon(
-            imageVector = Icons.Rounded.Call,
-            contentDescription = "Start Simulation",
-            modifier = Modifier.size(36.dp)
-        )
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun TimePickerDialog(
-    state: TimePickerState,
-    onDismiss: () -> Unit,
-    onConfirm: () -> Unit
-) {
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
-    ) {
-        Surface(
-            shape = MaterialTheme.shapes.extraLarge,
-            tonalElevation = 6.dp,
-            modifier = Modifier
-                .width(IntrinsicSize.Min)
-                .padding(16.dp)
-        ) {
-            Column(
-                modifier = Modifier.padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text(
-                    text = "Select Time",
-                    style = MaterialTheme.typography.labelMedium,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 20.dp)
-                )
-                TimePicker(state = state)
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 24.dp),
-                    horizontalArrangement = Arrangement.End
-                ) {
-                    TextButton(onClick = onDismiss) {
-                        Text("Cancel")
-                    }
-                    TextButton(onClick = onConfirm) {
-                        Text("OK")
-                    }
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(sim.label.take(8))
+                    sim.address?.let { Text(it, style = MaterialTheme.typography.bodySmall.copy(fontSize = 7.sp)) }
                 }
             }
         }
     }
 }
 
-private fun requestRole(activity: Activity, launcher: androidx.activity.result.ActivityResultLauncher<Intent>) {
+@Composable
+private fun PhoneNumberField(value: String, onValueChange: (String) -> Unit) {
+    OutlinedTextField(value = value, onValueChange = onValueChange, label = { Text("Phone Number") }, modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone), singleLine = true, shape = MaterialTheme.shapes.large)
+}
+
+@Composable
+private fun DurationFields(duration: String, onDurationChange: (String) -> Unit, showDelay: Boolean, delay: String, onDelayChange: (String) -> Unit, isMissed: Boolean) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        OutlinedTextField(value = duration, onValueChange = onDurationChange, label = { Text(if (isMissed) "Ringing Time" else "Duration") }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true, shape = MaterialTheme.shapes.large)
+        if (showDelay) OutlinedTextField(value = delay, onValueChange = onDelayChange, label = { Text("Delay") }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true, shape = MaterialTheme.shapes.large)
+    }
+}
+
+@Composable
+private fun CustomStartTimeSection(dateText: String, timeText: String, seconds: Int, onSecondsChange: (Int) -> Unit, onShowDatePicker: () -> Unit, onShowTimePicker: () -> Unit, onRefresh: () -> Unit) {
+    Column {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text("Call Start Time", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+            IconButton(onClick = onRefresh, Modifier.size(24.dp)) { Icon(Icons.Rounded.Refresh, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp)) }
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedButton(onClick = onShowDatePicker, Modifier.weight(1.5f), shape = MaterialTheme.shapes.medium, contentPadding = PaddingValues(horizontal = 8.dp)) { Text(dateText, maxLines = 1, softWrap = false) }
+            OutlinedButton(onClick = onShowTimePicker, Modifier.weight(1f), shape = MaterialTheme.shapes.medium, contentPadding = PaddingValues(horizontal = 4.dp)) { Text(timeText, maxLines = 1, softWrap = false) }
+            OutlinedTextField(
+                value = seconds.toString().padStart(2, '0'), onValueChange = { val v = it.take(2).filter { c -> c.isDigit() }.toIntOrNull() ?: 0; onSecondsChange(v.coerceIn(0, 59)) },
+                label = { Text("Sec", style = MaterialTheme.typography.labelSmall) }, modifier = Modifier.width(64.dp), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true, shape = MaterialTheme.shapes.medium, textStyle = MaterialTheme.typography.bodySmall
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AdvancedDetailsSection(expanded: Boolean, onExpandedChange: (Boolean) -> Unit, networkType: Int, onNetworkChange: (Int) -> Unit, callType: Int, onCallTypeChange: (Int) -> Unit, origin: Int, onOriginChange: (Int) -> Unit) {
+    Column {
+        Row(Modifier.fillMaxWidth().clickable { onExpandedChange(!expanded) }, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("Advanced Details", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+            Switch(checked = expanded, onCheckedChange = onExpandedChange)
+        }
+        if (expanded) {
+            Spacer(Modifier.height(16.dp))
+            SectionTitle("Network Type")
+            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                SegmentedButton(selected = networkType == 0, onClick = { onNetworkChange(0) }, shape = SegmentedButtonDefaults.itemShape(0, 2), enabled = (origin == 0 && callType == 0), colors = segmentedColors()) { Text("Standard") }
+                SegmentedButton(selected = networkType == 1, onClick = { onNetworkChange(1) }, shape = SegmentedButtonDefaults.itemShape(1, 2), colors = segmentedColors()) { Text("HD/5G") }
+            }
+            Spacer(Modifier.height(12.dp))
+            SectionTitle("Call Type")
+            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                SegmentedButton(selected = callType == 0, onClick = { onCallTypeChange(0) }, shape = SegmentedButtonDefaults.itemShape(0, 2), colors = segmentedColors()) { Text("Voice") }
+                SegmentedButton(selected = callType == 1, onClick = { onCallTypeChange(1); onNetworkChange(1) }, shape = SegmentedButtonDefaults.itemShape(1, 2), enabled = networkType == 1, colors = segmentedColors()) { Text("Video") }
+            }
+            Spacer(Modifier.height(12.dp))
+            SectionTitle("Call Origin")
+            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                SegmentedButton(selected = origin == 0, onClick = { onOriginChange(0) }, shape = SegmentedButtonDefaults.itemShape(0, 2), colors = segmentedColors()) { Text("Cellular") }
+                SegmentedButton(selected = origin == 1, onClick = { onOriginChange(1); onNetworkChange(1) }, shape = SegmentedButtonDefaults.itemShape(1, 2), enabled = networkType == 1, colors = segmentedColors()) { Text("WiFi") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DialerRoleSection(isDialerHeld: Boolean, onRequestRole: () -> Unit, onRegisterOnly: suspend () -> Unit, canRegister: Boolean) {
+    val scope = rememberCoroutineScope()
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        if (!isDialerHeld) {
+            Button(onClick = onRequestRole, Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.medium) { Text("Set as Default Dialer") }
+        } else {
+            OutlinedButton(onClick = { scope.launch { onRegisterOnly() } }, Modifier.fillMaxWidth(), enabled = canRegister, shape = MaterialTheme.shapes.medium) {
+                Icon(Icons.Rounded.History, null); Spacer(Modifier.width(8.dp)); Text("Register Only")
+            }
+        }
+        Spacer(Modifier.height(24.dp))
+        Text(if (isDialerHeld) "App is ready to handle calls" else "App needs dialer role to simulate calls", color = if (isDialerHeld) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
+        Spacer(Modifier.height(16.dp))
+    }
+}
+
+@Composable
+private fun StartCallFAB(enabled: Boolean, onClick: () -> Unit) {
+    LargeFloatingActionButton(onClick = { if (enabled) onClick() }, containerColor = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant, contentColor = if (enabled) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)) {
+        Icon(Icons.Rounded.Call, "Start Simulation", Modifier.size(36.dp))
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TimePickerDialog(state: TimePickerState, onDismiss: () -> Unit, onConfirm: () -> Unit) {
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(shape = MaterialTheme.shapes.extraLarge, tonalElevation = 6.dp, modifier = Modifier.width(IntrinsicSize.Min).padding(16.dp)) {
+            Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("Select Time", style = MaterialTheme.typography.labelMedium, modifier = Modifier.fillMaxWidth().padding(bottom = 20.dp))
+                TimePicker(state = state)
+                Row(Modifier.fillMaxWidth().padding(top = 24.dp), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onDismiss) { Text("Cancel") }
+                    TextButton(onClick = onConfirm) { Text("OK") }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun segmentedColors() = SegmentedButtonDefaults.colors(
+    activeContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
+    activeContentColor = MaterialTheme.colorScheme.primary,
+    activeBorderColor = MaterialTheme.colorScheme.primary,
+    inactiveContentColor = MaterialTheme.colorScheme.onSurfaceVariant
+)
+
+private fun requestDialerRole(activity: Activity, launcher: androidx.activity.result.ActivityResultLauncher<Intent>) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-        val roleManager = activity.getSystemService(Context.ROLE_SERVICE) as RoleManager
-        if (roleManager.isRoleAvailable(RoleManager.ROLE_DIALER)) {
-            val intent = roleManager.createRequestRoleIntent(RoleManager.ROLE_DIALER)
-            launcher.launch(intent)
+        val roleManager = activity.getSystemService(Context.ROLE_SERVICE) as android.app.role.RoleManager
+        if (roleManager.isRoleAvailable(android.app.role.RoleManager.ROLE_DIALER)) {
+            launcher.launch(roleManager.createRequestRoleIntent(android.app.role.RoleManager.ROLE_DIALER))
         }
     } else {
-        val intent = Intent(TelecomManager.ACTION_CHANGE_DEFAULT_DIALER)
-            .putExtra(TelecomManager.EXTRA_CHANGE_DEFAULT_DIALER_PACKAGE_NAME, activity.packageName)
-        launcher.launch(intent)
+        launcher.launch(Intent(TelecomManager.ACTION_CHANGE_DEFAULT_DIALER).putExtra(TelecomManager.EXTRA_CHANGE_DEFAULT_DIALER_PACKAGE_NAME, activity.packageName))
     }
 }

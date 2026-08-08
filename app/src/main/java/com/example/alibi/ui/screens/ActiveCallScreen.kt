@@ -27,8 +27,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.alibi.telecom.CallStateManager
 import kotlinx.coroutines.delay
-import java.util.Locale
 import kotlin.time.Duration.Companion.seconds
+import androidx.compose.ui.platform.LocalLocale
 
 @Composable
 fun ActiveCallScreen(
@@ -72,7 +72,7 @@ fun ActiveCallScreen(
 
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
 
-    val timeText = String.format(Locale.getDefault(), "%02d:%02d", durationSeconds / 60, durationSeconds % 60)
+    val timeText = String.format(LocalLocale.current.platformLocale, "%02d:%02d", durationSeconds / 60, durationSeconds % 60)
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),

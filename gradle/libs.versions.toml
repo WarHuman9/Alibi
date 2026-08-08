@@ -8,7 +8,7 @@ lifecycleRuntimeKtx = "2.11.0"
 lifecycleViewmodelCompose = "2.11.0"
 lifecycleRuntimeCompose = "2.11.0"
 activityCompose = "1.13.0"
-kotlin = "2.2.10"
+kotlin = "2.4.10"
 composeBom = "2026.06.01"
 navigation3Ui = "1.1.5"
 navigation3Runtime = "1.1.5"
@@ -22,6 +22,7 @@ runner = "1.7.0"
 kotlinxCoroutinesAndroid = "1.11.0"
 kotlinxCoroutinesCore = "1.11.0"
 material = "1.14.0"
+telecom = "1.0.1"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -54,6 +55,7 @@ androidx-compose-material-icons-extended = { group = "androidx.compose.material"
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "kotlinxCoroutinesAndroid" }
 kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "kotlinxCoroutinesCore" }
 material = { group = "com.google.android.material", name = "material", version.ref = "material" }
+androidx-telecom = { group = "androidx.core", name = "core-telecom", version.ref = "telecom" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
