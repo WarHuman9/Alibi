@@ -93,7 +93,7 @@ class SimulatedConnection(private val context: Context) : Connection() {
                 }
             }
 
-            CallStateManager.setSimulatedCallActive(context, true, address?.schemeSpecificPart)
+            CallStateManager.setSimulatedCallActive(true, address?.schemeSpecificPart)
             
             val intent = Intent(context, CallNotificationService::class.java).apply {
                 putExtra(CallNotificationService.EXTRA_PHONE_NUMBER, address?.schemeSpecificPart)
@@ -129,6 +129,15 @@ class SimulatedConnection(private val context: Context) : Connection() {
         if (isDestroyed.getAndSet(true)) return
         durationJob?.cancel()
         durationJob = null
+
+        // CRITICAL: Immediately detach from singleton to prevent capture leaks
+        // and ensure we don't handle any more requests during teardown.
+        if (CallStateManager.onDisconnectRequested?.let { it.javaClass.enclosingClass == this.javaClass } == true) {
+            CallStateManager.onDisconnectRequested = null
+        }
+        if (CallStateManager.onAnswerRequested?.let { it.javaClass.enclosingClass == this.javaClass } == true) {
+            CallStateManager.onAnswerRequested = null
+        }
 
         connectionScope.launch {
             try {

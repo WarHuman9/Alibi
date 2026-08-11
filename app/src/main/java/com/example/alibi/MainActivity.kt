@@ -11,41 +11,71 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.*
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import kotlin.time.Duration.Companion.seconds
+import android.telecom.TelecomManager
 import androidx.navigation3.runtime.NavEntry
+import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.ui.NavDisplay
-import com.example.alibi.service.CallNotificationService
 import com.example.alibi.telecom.CallStateManager
+import com.example.alibi.telecom.TelecomHelper
 import com.example.alibi.ui.ActiveCallRoute
 import com.example.alibi.ui.MainTabScreen
 import com.example.alibi.ui.MainTabsRoute
 import com.example.alibi.ui.screens.ActiveCallScreen
 import com.example.alibi.ui.theme.AlibiTheme
 import com.example.alibi.util.RoleHelper
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.core.content.ContextCompat
 
 class MainActivity : ComponentActivity() {
+
+    private val _systemStatus = MutableStateFlow(SystemStatus())
+    val systemStatus = _systemStatus.asStateFlow()
+
+    data class SystemStatus(
+        val isDialerRoleHeld: Boolean = false,
+        val isCallLogGranted: Boolean = false,
+        val isNotificationsGranted: Boolean = false,
+        val isPhonePermissionsGranted: Boolean = false,
+        val isRegistryWarmedUp: Boolean = false,
+        val isRepairing: Boolean = false
+    )
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         
-        // --- System Hard Reset ---
-        // Clean up any leaked state/notifications from previous app instances or crashes.
-        CallStateManager.forceClearState(this)
-        stopService(Intent(this, CallNotificationService::class.java))
-        val nm = getSystemService(NOTIFICATION_SERVICE) as android.app.NotificationManager
-        nm.cancelAll() 
+        // --- Smart System Reset ---
+        // Only wipe state if no call is active. This prevents the "Timer Chip" crash.
+        if (!CallStateManager.isBusy.value) {
+            CallStateManager.forceClearState(this)
+        }
+
+        // CRITICAL: Pre-register the simulation account before any call attempts.
+        val telecomHelper = TelecomHelper(this)
+        lifecycleScope.launch {
+            telecomHelper.registerPhoneAccount()
+        }
 
         val initialNumber = intent?.data?.schemeSpecificPart?.takeIf {
             intent.action == Intent.ACTION_DIAL || intent.action == Intent.ACTION_VIEW
         }
 
         setContent {
-            AppOnboarding {
+            val status by systemStatus.collectAsStateWithLifecycle()
+            
+            AppOnboarding(status) {
                 AlibiTheme {
                     AlibiApp(initialNumber)
                 }
@@ -53,51 +83,156 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        // Redirection handled by reactive navigation in AlibiApp
+        setIntent(intent)
+    }
+
     /**
      * Component to handle sequential permission and role onboarding.
+     * Implements the "Reverse Chain": Notifications -> Call Log -> Dialer Role.
      */
     @Composable
-    private fun AppOnboarding(content: @Composable () -> Unit) {
+    private fun AppOnboarding(status: SystemStatus, content: @Composable () -> Unit) {
         val context = this
-        val callLogPermissionLauncher = rememberLauncherForActivityResult(
-            contract = ActivityResultContracts.RequestPermission()
-        ) { Log.d(TAG, "Call log permission handled") }
-
-        val notificationPermissionLauncher = rememberLauncherForActivityResult(
-            contract = ActivityResultContracts.RequestPermission()
-        ) { 
-            Log.d(TAG, "Notification permission handled")
-            callLogPermissionLauncher.launch(android.Manifest.permission.READ_CALL_LOG)
-        }
-
+        val scope = rememberCoroutineScope()
+        val telecomHelper = remember { TelecomHelper(context) }
+        
         val roleLauncher = rememberLauncherForActivityResult(
             contract = ActivityResultContracts.StartActivityForResult()
         ) { 
-            Log.d(TAG, "Dialer role handled")
-            if (Build.VERSION.SDK_INT >= 33) {
-                notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
-            } else {
-                callLogPermissionLauncher.launch(android.Manifest.permission.READ_CALL_LOG)
+            val isHeld = RoleHelper.isDialerRoleHeld(context)
+            _systemStatus.value = _systemStatus.value.copy(isDialerRoleHeld = isHeld)
+            if (isHeld) {
+                scope.launch { telecomHelper.cleanupLegacyAccounts() }
             }
         }
 
-        LaunchedEffect(Unit) {
-            // Sequence: Dialer Role -> Notifications -> Call Log
+        val phonePermissionsLauncher = rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.RequestMultiplePermissions()
+        ) { results ->
+            val isGranted = results.values.all { it }
+            _systemStatus.value = _systemStatus.value.copy(isPhonePermissionsGranted = isGranted)
+            // If granted, try a proactive registration
+            if (isGranted) {
+                scope.launch { telecomHelper.registerPhoneAccount() }
+            }
+            
+            // Final step: Dialer Role
             if (!RoleHelper.isDialerRoleHeld(context)) {
                 requestDialerRole(context, roleLauncher)
-            } else {
-                if (Build.VERSION.SDK_INT >= 33) {
-                    notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
-                } else {
-                    callLogPermissionLauncher.launch(android.Manifest.permission.READ_CALL_LOG)
+            }
+        }
+
+        val callLogPermissionLauncher = rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.RequestPermission()
+        ) { isGranted -> 
+            _systemStatus.value = _systemStatus.value.copy(isCallLogGranted = isGranted)
+            // Next step: Phone Permissions
+            val permissions = mutableListOf(Manifest.permission.READ_PHONE_STATE)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                permissions.add(Manifest.permission.READ_PHONE_NUMBERS)
+            }
+            phonePermissionsLauncher.launch(permissions.toTypedArray())
+        }
+
+        val notificationPermissionLauncher = rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.RequestPermission()
+        ) { isGranted ->
+            _systemStatus.value = _systemStatus.value.copy(isNotificationsGranted = isGranted)
+            // Next step: Call Log
+            callLogPermissionLauncher.launch(Manifest.permission.READ_CALL_LOG)
+        }
+
+        val lifecycleOwner = LocalLifecycleOwner.current
+        val lifecycleState by lifecycleOwner.lifecycle.currentStateFlow.collectAsStateWithLifecycle()
+
+        LaunchedEffect(lifecycleState) {
+            if (lifecycleState == Lifecycle.State.RESUMED) {
+                val isRoleHeld = RoleHelper.isDialerRoleHeld(context)
+                val isCallLogGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALL_LOG) == PackageManager.PERMISSION_GRANTED
+                val isNotificationsGranted = if (Build.VERSION.SDK_INT >= 33) {
+                    ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+                } else true
+                
+                val hasPhoneState = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED
+                val hasPhoneNumbers = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_NUMBERS) == PackageManager.PERMISSION_GRANTED
+                } else true
+                val isPhoneGranted = hasPhoneState && hasPhoneNumbers
+
+                // Real-time account verification
+                val isWarmedUp = telecomHelper.isAccountRegistered()
+
+                _systemStatus.value = SystemStatus(
+                    isDialerRoleHeld = isRoleHeld,
+                    isCallLogGranted = isCallLogGranted,
+                    isNotificationsGranted = isNotificationsGranted,
+                    isPhonePermissionsGranted = isPhoneGranted,
+                    isRegistryWarmedUp = isWarmedUp
+                )
+
+                if (isRoleHeld) {
+                    scope.launch { telecomHelper.cleanupLegacyAccounts() }
                 }
             }
         }
 
-        content()
+        // Start the permission chain
+        LaunchedEffect(Unit) {
+            val hasNotifications = if (Build.VERSION.SDK_INT >= 33) {
+                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+            } else true
+
+            val hasCallLog = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALL_LOG) == PackageManager.PERMISSION_GRANTED
+            val hasPhoneState = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED
+            val hasPhoneNumbers = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_NUMBERS) == PackageManager.PERMISSION_GRANTED
+            } else true
+            val isRoleHeld = RoleHelper.isDialerRoleHeld(context)
+
+            when {
+                !hasNotifications && Build.VERSION.SDK_INT >= 33 -> notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                !hasCallLog -> callLogPermissionLauncher.launch(Manifest.permission.READ_CALL_LOG)
+                !hasPhoneState || !hasPhoneNumbers -> {
+                    val permissions = mutableListOf(Manifest.permission.READ_PHONE_STATE)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        permissions.add(Manifest.permission.READ_PHONE_NUMBERS)
+                    }
+                    phonePermissionsLauncher.launch(permissions.toTypedArray())
+                }
+                !isRoleHeld -> requestDialerRole(context, roleLauncher)
+                else -> scope.launch { telecomHelper.cleanupLegacyAccounts() }
+            }
+        }
+
+        CompositionLocalProvider(LocalSystemStatus provides status) {
+            content()
+        }
+    }
+
+    fun triggerRepair() {
+        val telecomHelper = TelecomHelper(this)
+        _systemStatus.value = _systemStatus.value.copy(isRepairing = true)
+        
+        lifecycleScope.launch {
+            // Heartbeat: Check registry every 1s for 15s
+            for (i in 1..15) {
+                telecomHelper.registerPhoneAccount()
+                val isWarmed = telecomHelper.isAccountRegistered()
+                if (isWarmed) {
+                    _systemStatus.value = _systemStatus.value.copy(isRegistryWarmedUp = true, isRepairing = false)
+                    return@launch
+                }
+                delay(1.seconds)
+            }
+            _systemStatus.value = _systemStatus.value.copy(isRepairing = false)
+        }
     }
 
     companion object {
+        val LocalSystemStatus = staticCompositionLocalOf { SystemStatus() }
         private const val TAG = "MainActivity"
 
         private fun requestDialerRole(activity: Activity, launcher: androidx.activity.result.ActivityResultLauncher<Intent>) {
@@ -108,8 +243,8 @@ class MainActivity : ComponentActivity() {
                         launcher.launch(roleManager.createRequestRoleIntent(android.app.role.RoleManager.ROLE_DIALER))
                     }
                 } else {
-                    val intent = Intent(android.telecom.TelecomManager.ACTION_CHANGE_DEFAULT_DIALER)
-                        .putExtra(android.telecom.TelecomManager.EXTRA_CHANGE_DEFAULT_DIALER_PACKAGE_NAME, activity.packageName)
+                    val intent = Intent(TelecomManager.ACTION_CHANGE_DEFAULT_DIALER)
+                        .putExtra(TelecomManager.EXTRA_CHANGE_DEFAULT_DIALER_PACKAGE_NAME, activity.packageName)
                     launcher.launch(intent)
                 }
             } catch (e: Exception) {
@@ -152,10 +287,10 @@ fun AlibiApp(initialNumber: String? = null) {
                         initialNumber = initialNumber,
                         onNavigateToCall = { /* Handled by global effect */ }
                     )
-                } as NavEntry<androidx.navigation3.runtime.NavKey>
+                } as NavEntry<NavKey>
                 is ActiveCallRoute -> NavEntry(key) {
                     ActiveCallScreen(phoneNumber = key.phoneNumber)
-                } as NavEntry<androidx.navigation3.runtime.NavKey>
+                } as NavEntry<NavKey>
                 else -> error("Unknown key: $key")
             }
         }

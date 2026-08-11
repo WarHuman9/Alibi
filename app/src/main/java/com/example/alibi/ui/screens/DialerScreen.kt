@@ -26,6 +26,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -33,6 +34,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.alibi.telecom.CallStateManager
 import com.example.alibi.telecom.TelecomHelper
 import com.example.alibi.util.CallLogHelper
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -45,6 +47,7 @@ enum class PhoneSubTab { RECENTS, CONTACTS }
 @Composable
 fun DialerScreen(initialNumber: String? = null) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val telecomHelper = remember { TelecomHelper(context) }
     val callLogHelper = remember { CallLogHelper.getInstance(context) }
     
@@ -60,17 +63,29 @@ fun DialerScreen(initialNumber: String? = null) {
         mutableStateOf(ContextCompat.checkSelfPermission(context, android.Manifest.permission.READ_CALL_LOG) == android.content.pm.PackageManager.PERMISSION_GRANTED)
     }
     val recentCalls by if (hasCallLogPermission) {
-        callLogHelper.getRecentCallsFlow(50).collectAsStateWithLifecycle(emptyList())
+        callLogHelper.getRecentCallsFlow(500).collectAsStateWithLifecycle(null)
     } else {
         remember { mutableStateOf(emptyList<CallLogHelper.CallLogItem>()) }
     }
-    val simAccounts = remember { telecomHelper.getCallCapableSims() }
+    
+    val simAccounts = remember { mutableStateListOf<TelecomHelper.SimAccount>() }
+    LaunchedEffect(Unit) {
+        simAccounts.clear()
+        simAccounts.addAll(telecomHelper.getCallCapableSims())
+    }
     
     // --- UI State ---
     val listState = rememberLazyListState()
-    var dialPadVisible by remember { mutableStateOf(true) }
-    var selectedSim by remember { 
-        mutableStateOf(simAccounts.find { it.handle.id == telecomHelper.getPreferredSimId() } ?: simAccounts.firstOrNull())
+    var dialPadVisible by remember { mutableStateOf(false) }
+    
+    val isLoading = recentCalls == null
+    val displayCalls = recentCalls ?: emptyList()
+    var selectedSim by remember { mutableStateOf<TelecomHelper.SimAccount?>(null) }
+
+    LaunchedEffect(simAccounts.size) {
+        if (selectedSim == null && simAccounts.isNotEmpty()) {
+            selectedSim = simAccounts.find { it.handle.id == telecomHelper.getPreferredSimId() } ?: simAccounts.firstOrNull()
+        }
     }
 
     // --- Logic Hooks ---
@@ -82,8 +97,7 @@ fun DialerScreen(initialNumber: String? = null) {
         }
     }
 
-    val isAtTop by remember { derivedStateOf { listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0 } }
-    LaunchedEffect(isAtTop) { if (isAtTop) dialPadVisible = true }
+    // Removed auto-restore effect to keep dial pad hidden by default as requested.
 
     // --- Layout ---
     Column(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
@@ -103,31 +117,37 @@ fun DialerScreen(initialNumber: String? = null) {
         )
 
         Box(modifier = Modifier.weight(1f)) {
-            when (selectedTab) {
-                PhoneSubTab.RECENTS -> {
-                    RecentCallsList(
-                        state = listState,
-                        calls = recentCalls.filter { it.number.contains(searchQuery) || (it.name?.contains(searchQuery, true) ?: false) },
-                        sims = simAccounts,
-                        onCallClick = { 
-                            phoneNumber = it
-                            dialPadVisible = true
-                        }
-                    )
+            if (isLoading) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator()
                 }
-                PhoneSubTab.CONTACTS -> {
-                    ContactsScreen(
-                        searchQuery = searchQuery,
-                        onContactClick = { 
-                            phoneNumber = it
-                            selectedTab = PhoneSubTab.RECENTS
-                            dialPadVisible = true
-                        }
-                    )
+            } else {
+                when (selectedTab) {
+                    PhoneSubTab.RECENTS -> {
+                        RecentCallsList(
+                            state = listState,
+                            calls = displayCalls.filter { it.number.contains(searchQuery) || (it.name?.contains(searchQuery, true) ?: false) },
+                            sims = simAccounts,
+                            onCallClick = { 
+                                phoneNumber = it
+                                dialPadVisible = true
+                            }
+                        )
+                    }
+                    PhoneSubTab.CONTACTS -> {
+                        ContactsScreen(
+                            searchQuery = searchQuery,
+                            onContactClick = { 
+                                phoneNumber = it
+                                selectedTab = PhoneSubTab.RECENTS
+                                dialPadVisible = true
+                            }
+                        )
+                    }
                 }
             }
 
-            if (!dialPadVisible && selectedTab == PhoneSubTab.RECENTS) {
+            if (!dialPadVisible && selectedTab == PhoneSubTab.RECENTS && !isLoading) {
                 FloatingActionButton(
                     onClick = { dialPadVisible = true },
                     modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
@@ -154,7 +174,9 @@ fun DialerScreen(initialNumber: String? = null) {
                 },
                 onCallClick = { 
                     if (phoneNumber.isNotEmpty() && !isBusy) {
-                        telecomHelper.placeRealCall(phoneNumber, selectedSim?.handle)
+                        scope.launch {
+                            telecomHelper.placeRealCall(phoneNumber, selectedSim?.handle)
+                        }
                     }
                 }
             )
@@ -175,7 +197,7 @@ private fun BusyBanner(message: String) {
             text = message,
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(8.dp),
-            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+            textAlign = TextAlign.Center
         )
     }
 }
@@ -305,8 +327,6 @@ private fun formatDuration(seconds: Long): String {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DialPad(phoneNumber: String, selectedSim: TelecomHelper.SimAccount?, availableSims: List<TelecomHelper.SimAccount>, onDigitClick: (String) -> Unit, onBackspace: () -> Unit, onSimSelected: (TelecomHelper.SimAccount) -> Unit, onCallClick: () -> Unit) {
-    var showSimMenu by remember { mutableStateOf(false) }
-
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp),
@@ -327,13 +347,9 @@ fun DialPad(phoneNumber: String, selectedSim: TelecomHelper.SimAccount?, availab
             DialPadActions(
                 availableSims = availableSims,
                 selectedSim = selectedSim,
-                onShowSimMenu = { showSimMenu = true },
+                onSimSelected = onSimSelected,
                 onCallClick = onCallClick
             )
-
-            if (showSimMenu) {
-                SimSelectionMenu(expanded = showSimMenu, sims = availableSims, onDismiss = { showSimMenu = false }, onSimSelected = onSimSelected)
-            }
         }
     }
 }
@@ -351,11 +367,20 @@ private fun NumberDisplay(phoneNumber: String, onBackspace: () -> Unit) {
 }
 
 @Composable
-private fun DialPadActions(availableSims: List<TelecomHelper.SimAccount>, selectedSim: TelecomHelper.SimAccount?, onShowSimMenu: () -> Unit, onCallClick: () -> Unit) {
+private fun DialPadActions(availableSims: List<TelecomHelper.SimAccount>, selectedSim: TelecomHelper.SimAccount?, onSimSelected: (TelecomHelper.SimAccount) -> Unit, onCallClick: () -> Unit) {
+    var showSimMenu by remember { mutableStateOf(false) }
+
     Row(modifier = Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
         Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
             if (availableSims.size > 1) {
-                SimSelector(selectedSim = selectedSim, onClick = onShowSimMenu)
+                SimSelector(selectedSim = selectedSim, onClick = { showSimMenu = true })
+                
+                SimSelectionMenu(
+                    expanded = showSimMenu, 
+                    sims = availableSims, 
+                    onDismiss = { showSimMenu = false }, 
+                    onSimSelected = onSimSelected
+                )
             } else Spacer(Modifier.size(40.dp))
         }
 

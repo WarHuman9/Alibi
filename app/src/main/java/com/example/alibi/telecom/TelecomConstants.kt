@@ -12,7 +12,14 @@ object TelecomConstants {
     const val EXTRA_CALL_FEATURES = "EXTRA_CALL_FEATURES"
     const val EXTRA_AUTO_ANSWER_DELAY = "EXTRA_AUTO_ANSWER_DELAY"
     
-    // Internal Phone Account ID
-    const val SIMULATED_ACCOUNT_ID = "SimulatedCallAccount"
-    const val SIMULATED_ACCOUNT_LABEL = "Alibi Simulated Call"
+    // Internal Phone Account ID - Keep this stable to prevent system cache issues.
+    const val SIMULATED_ACCOUNT_ID = "AlibiSimulatedAccount_Stable"
+    const val SIMULATED_ACCOUNT_LABEL = "Alibi Simulation"
+
+    // Legacy IDs for one-time cleanup
+    val LEGACY_ACCOUNT_IDS = listOf(
+        "SimulatedCallAccount",
+        "AlibiSimulatedAccount_v2",
+        "AlibiSimulatedAccount"
+    )
 }

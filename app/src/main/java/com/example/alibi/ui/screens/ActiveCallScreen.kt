@@ -50,7 +50,7 @@ fun ActiveCallScreen(
     var durationSeconds by remember { mutableLongStateOf(0L) }
 
     LaunchedEffect(callState, answerTime) {
-        if (callState == Call.STATE_ACTIVE && answerTime > 0) {
+        if ((callState == Call.STATE_ACTIVE) && (answerTime > 0)) {
             while (true) {
                 val currentTime = System.currentTimeMillis()
                 durationSeconds = if (currentTime >= answerTime) (currentTime - answerTime) / 1000 else 0
@@ -73,6 +73,12 @@ fun ActiveCallScreen(
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
 
     val timeText = String.format(LocalLocale.current.platformLocale, "%02d:%02d", durationSeconds / 60, durationSeconds % 60)
+
+    // Capture the last non-zero duration to prevent flickering on disconnect
+    var lastDurationText by remember { mutableStateOf("00:00") }
+    if (durationSeconds > 0) {
+        lastDurationText = timeText
+    }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -181,9 +187,9 @@ fun ActiveCallScreen(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                if (callState == Call.STATE_ACTIVE) {
+                if (callState == Call.STATE_ACTIVE || callState == Call.STATE_DISCONNECTED) {
                     Text(
-                        text = timeText,
+                        text = if (callState == Call.STATE_DISCONNECTED) lastDurationText else timeText,
                         style = MaterialTheme.typography.displaySmall.copy(
                             fontWeight = FontWeight.Light
                         ),

@@ -103,20 +103,24 @@ class CallNotificationService : Service() {
 
             if (isRinging) {
                 builder.style = Notification.CallStyle.forIncomingCall(person, hangupIntent, answerIntent)
-            } else if (isActive || isConnecting) {
-                // Use CallStyle for both Active and Connecting (Dialing) phases to ensure "Stickiness"
+            } else if (isActive) {
+                // ONLY use CallStyle.forOngoingCall when call is truly ACTIVE
+                // This prevents Android 16 from showing the status bar timer/hangup chip too early.
                 val finalStartTime = if (startTime > 0L) startTime else System.currentTimeMillis()
-                
-                // Only show timer if the call is actually Active (connected)
-                if (isActive) {
-                    builder.setWhen(finalStartTime)
-                    builder.setUsesChronometer(true)
-                    builder.setShowWhen(true)
-                } else {
-                    builder.setShowWhen(false)
-                }
-                
+                builder.setWhen(finalStartTime)
+                builder.setUsesChronometer(true)
+                builder.setShowWhen(true)
                 builder.style = Notification.CallStyle.forOngoingCall(person, hangupIntent)
+            } else if (isConnecting) {
+                // Connecting/Dialing phase uses Standard Notification to remain sticky 
+                // but avoids triggering the system "Active Call" chip.
+                builder.setShowWhen(false)
+                builder.setUsesChronometer(false)
+                
+                val action = Notification.Action.Builder(
+                    android.graphics.drawable.Icon.createWithResource(this, android.R.drawable.ic_menu_close_clear_cancel),
+                    "Hangup", hangupIntent).build()
+                builder.addAction(action)
             } else {
                 // Missed - Use standard notification
                 builder.setShowWhen(false)
@@ -144,13 +148,18 @@ class CallNotificationService : Service() {
 
             NotificationCompat.Builder(this, channelId)
                 .setSmallIcon(android.R.drawable.ic_menu_call)
-                .setContentTitle(if (isMissed) "Incoming call..." else "Calling...")
+                .setContentTitle(when {
+                    isMissed -> "Incoming call..."
+                    isDialing -> "Calling..."
+                    else -> "Active Call"
+                })
                 .setContentText(phoneNumber)
                 .setContentIntent(pendingIntent)
-                .setPriority(if (isSimulated) NotificationCompat.PRIORITY_LOW else NotificationCompat.PRIORITY_HIGH)
+                // Use PRIORITY_HIGH even for simulated to avoid MIUI hiding it
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setCategory(Notification.CATEGORY_CALL)
-                .setOngoing(true)
-                .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Hangup", hangupIntent)
+                .setOngoing(!isMissed)
+                .addAction(android.R.drawable.ic_menu_close_clear_cancel, if (isMissed) "Dismiss" else "Hangup", hangupIntent)
                 .apply {
                     if (isIncoming && !isMissed) addAction(android.R.drawable.ic_menu_call, "Answer", answerIntent)
                     

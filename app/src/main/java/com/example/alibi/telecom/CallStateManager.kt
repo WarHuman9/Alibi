@@ -5,14 +5,17 @@ import android.provider.CallLog
 import android.telecom.Call
 import android.telecom.PhoneAccountHandle
 import android.util.Log
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicBoolean
+import android.content.Intent
+import android.os.Build
+import com.example.alibi.service.CallNotificationService
+import com.example.alibi.util.CallLogHelper
 
 /**
  * Singleton manager for call state across the application.
@@ -37,7 +40,6 @@ object CallStateManager {
     val simulatedPhoneNumber: StateFlow<String?> = _simulatedPhoneNumber.asStateFlow()
 
     private val _startTime = MutableStateFlow(0L)
-    val startTime: StateFlow<Long> = _startTime.asStateFlow()
 
     private val _customStartTime = MutableStateFlow<Long?>(null)
     private val _intendedDuration = MutableStateFlow<Long?>(null)
@@ -68,8 +70,7 @@ object CallStateManager {
     var onMuteRequested: ((Boolean) -> Unit)? = null
     var onSpeakerRequested: ((Boolean) -> Unit)? = null
 
-    private var isUserTerminated = false
-    private val managerScope = CoroutineScope(Dispatchers.Main)
+    private val isUserTerminated = AtomicBoolean(false)
 
     private val callCallback = object : Call.Callback() {
         override fun onStateChanged(call: Call, state: Int) {
@@ -96,7 +97,7 @@ object CallStateManager {
         if (_startTime.value == 0L) {
             _startTime.value = _customStartTime.value ?: System.currentTimeMillis()
         }
-        if (state == Call.STATE_ACTIVE && _answerTime.value == 0L) {
+        if ((state == Call.STATE_ACTIVE) && (_answerTime.value == 0L)) {
             _answerTime.value = System.currentTimeMillis()
         }
     }
@@ -108,14 +109,20 @@ object CallStateManager {
     fun setMimicSimHandle(handle: PhoneAccountHandle?) { _mimicSimHandle.value = handle }
     fun setCallFeatures(features: Int) { _callFeatures.value = features }
 
-    fun onCallAdded(call: Call, context: Context, isSimulated: Boolean? = null) {
+    fun onCallAdded(call: Call, isSimulated: Boolean? = null) {
         _currentCall.value = call
-        _callState.value = call.state
+        val state = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            call.details.state
+        } else {
+            @Suppress("DEPRECATION")
+            call.state
+        }
+        _callState.value = state
         
         val isSimulatedCall = isSimulated ?: _isSimulatedCallActive.value
         _isRealCall.value = !isSimulatedCall
         
-        updateTimes(call.state)
+        updateTimes(state)
         updateBusyState()
         call.registerCallback(callCallback)
     }
@@ -130,7 +137,7 @@ object CallStateManager {
         }
     }
 
-    fun setSimulatedCallActive(context: Context, active: Boolean, phoneNumber: String? = null, state: Int = Call.STATE_ACTIVE, type: Int? = null) {
+    fun setSimulatedCallActive(active: Boolean, phoneNumber: String? = null, state: Int = Call.STATE_ACTIVE, type: Int? = null) {
         _isSimulatedCallActive.value = active
         if (phoneNumber != null) _simulatedPhoneNumber.value = phoneNumber
         
@@ -146,22 +153,7 @@ object CallStateManager {
 
     // --- Termination & Logging ---
 
-    /**
-     * Records call end. Uses a launch with NonCancellable to ensure DB write finishes.
-     */
-    fun recordCallEnd(context: Context) {
-        val number = _simulatedPhoneNumber.value ?: return
-        val start = _startTime.value
-        val answer = _answerTime.value
-        val type = _callType.value
-        val intended = _intendedDuration.value
-        val simHandle = _mimicSimHandle.value
-        val feats = _callFeatures.value
-        
-        managerScope.launch {
-            recordCallEndInternal(context, number, start, answer, type, intended, simHandle, feats)
-        }
-    }
+    // recordCallEnd was unused and is removed.
 
     suspend fun terminateSimulatedSession(
         context: Context,
@@ -198,20 +190,20 @@ object CallStateManager {
             callType == CallLog.Calls.MISSED_TYPE -> {
                 finalDuration = 0L
             }
-            callType == CallLog.Calls.INCOMING_TYPE && answerTime == 0L -> {
-                finalType = if (isUserTerminated) CallLog.Calls.REJECTED_TYPE else CallLog.Calls.MISSED_TYPE
+            (callType == CallLog.Calls.INCOMING_TYPE) && (answerTime == 0L) -> {
+                finalType = if (isUserTerminated.get()) CallLog.Calls.REJECTED_TYPE else CallLog.Calls.MISSED_TYPE
                 finalDuration = 0L
             }
             answerTime > 0L -> {
                 val actualElapsed = (endTime - answerTime) / 1000
-                finalDuration = if (isUserTerminated) actualElapsed else (intendedDuration ?: actualElapsed)
+                finalDuration = if (isUserTerminated.get()) actualElapsed else (intendedDuration ?: actualElapsed)
             }
             callType == CallLog.Calls.OUTGOING_TYPE && answerTime == 0L -> {
                 finalDuration = 0L
             }
         }
 
-        val helper = com.example.alibi.util.CallLogHelper.getInstance(context)
+        val helper = CallLogHelper.getInstance(context)
         helper.insertCallLog(phoneNumber, finalDuration, startTime, finalType, simHandle, features)
         Log.d(TAG, "Call log inserted successfully: $phoneNumber, dur: $finalDuration")
     }
@@ -224,7 +216,7 @@ object CallStateManager {
     }
 
     fun disconnect() {
-        isUserTerminated = true
+        isUserTerminated.set(true)
         _currentCall.value?.disconnect()
         onDisconnectRequested?.invoke()
         
@@ -234,8 +226,21 @@ object CallStateManager {
 
     /**
      * Wipes all state. Called before new calls or on app reset.
+     * Implementation is now more cautious to avoid native race conditions.
      */
     fun forceClearState(context: Context) {
+        Log.d(TAG, "forceClearState requested")
+        
+        // 1. Unregister callbacks FIRST before nulling the object
+        _currentCall.value?.let { call ->
+            try {
+                call.unregisterCallback(callCallback)
+            } catch (e: Exception) {
+                Log.w(TAG, "Error unregistering callback during forceClearState", e)
+            }
+        }
+        
+        // 2. Wipe the state
         _currentCall.value = null
         _callState.value = Call.STATE_DISCONNECTED
         _isSimulatedCallActive.value = false
@@ -247,14 +252,22 @@ object CallStateManager {
         _intendedDuration.value = null
         _mimicSimHandle.value = null
         _callFeatures.value = 0
-        isUserTerminated = false
+        isUserTerminated.set(false)
+        
+        // 3. Clear UI listeners
         onAnswerRequested = null
         onDisconnectRequested = null
         onSpeakerRequested = null
         onMuteRequested = null
         
-        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
-        nm.cancel(101) 
+        // 4. Notification cleanup
+        try {
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+            nm.cancel(101) 
+            context.stopService(Intent(context, CallNotificationService::class.java))
+        } catch (e: Exception) {
+            Log.w(TAG, "Notification cleanup failed", e)
+        }
         
         updateBusyState()
     }

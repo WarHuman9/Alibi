@@ -25,13 +25,14 @@ class SimulatedConnectionService : ConnectionService() {
         connectionManagerPhoneAccount: PhoneAccountHandle?,
         request: ConnectionRequest?
     ): Connection {
-        Log.d(TAG, "onCreateIncomingConnection")
+        Log.d(TAG, "onCreateIncomingConnection: ${request?.address}")
         val connection = SimulatedConnection(this)
         
         setupConnection(connection, request)
         connection.setRinging()
         
         val metadata = extractMetadata(request)
+        Log.d(TAG, "Metadata extracted: $metadata")
         applyMetadata(connection, metadata, isIncoming = true)
         
         startNotification(metadata, isIncoming = true, isDialing = false)
@@ -51,13 +52,14 @@ class SimulatedConnectionService : ConnectionService() {
         connectionManagerPhoneAccount: PhoneAccountHandle?,
         request: ConnectionRequest?
     ): Connection {
-        Log.d(TAG, "onCreateOutgoingConnection")
+        Log.d(TAG, "onCreateOutgoingConnection: ${request?.address}")
         val connection = SimulatedConnection(this)
         
         setupConnection(connection, request)
         connection.setDialing()
         
         val metadata = extractMetadata(request)
+        Log.d(TAG, "Metadata extracted: $metadata")
         applyMetadata(connection, metadata, isIncoming = false)
         
         connection.setAutoAnswerDelay(metadata.autoAnswerDelay)
@@ -85,19 +87,26 @@ class SimulatedConnectionService : ConnectionService() {
         val extras = request?.extras ?: Bundle.EMPTY
         val outgoingExtras = extras.getBundle(TelecomManager.EXTRA_OUTGOING_CALL_EXTRAS) ?: Bundle.EMPTY
         
-        // Merge top-level and nested extras (support various OEM behaviors)
+        // Helper to check both bundles for a value
+        fun getInt(key: String, default: Int): Int {
+            val v = extras.getInt(key, -1).takeIf { it != -1 }
+            if (v != null) return v
+            return outgoingExtras.getInt(key, default)
+        }
+
+        fun getLong(key: String): Long? {
+            return extras.getLong(key, -1L).takeIf { it != -1L }
+                ?: outgoingExtras.getLong(key, -1L).takeIf { it != -1L }
+        }
+
         return CallMetadata(
             phoneNumber = request?.address?.schemeSpecificPart ?: "Unknown",
-            callType = extras.getInt(EXTRA_CALL_TYPE, CallLog.Calls.INCOMING_TYPE),
-            startTime = extras.getLong(EXTRA_CUSTOM_START_TIME, -1L).takeIf { it != -1L }
-                ?: outgoingExtras.getLong(EXTRA_CUSTOM_START_TIME, -1L).takeIf { it != -1L },
-            duration = extras.getLong(EXTRA_INTENDED_DURATION, -1L).takeIf { it != -1L }
-                ?: outgoingExtras.getLong(EXTRA_INTENDED_DURATION, -1L).takeIf { it != -1L },
+            callType = getInt(EXTRA_CALL_TYPE, CallLog.Calls.INCOMING_TYPE),
+            startTime = getLong(EXTRA_CUSTOM_START_TIME),
+            duration = getLong(EXTRA_INTENDED_DURATION),
             simHandle = getPhoneAccountHandle(extras, outgoingExtras),
-            features = extras.getInt(EXTRA_CALL_FEATURES, 0).takeIf { it != 0 }
-                ?: outgoingExtras.getInt(EXTRA_CALL_FEATURES, 0),
-            autoAnswerDelay = extras.getInt(EXTRA_AUTO_ANSWER_DELAY, 0).takeIf { it != 0 }
-                ?: outgoingExtras.getInt(EXTRA_AUTO_ANSWER_DELAY, 0)
+            features = getInt(EXTRA_CALL_FEATURES, 0),
+            autoAnswerDelay = getInt(EXTRA_AUTO_ANSWER_DELAY, 0)
         )
     }
 
@@ -128,7 +137,7 @@ class SimulatedConnectionService : ConnectionService() {
         CallStateManager.setCallFeatures(data.features)
         
         val state = if (isIncoming) Call.STATE_RINGING else Call.STATE_DIALING
-        CallStateManager.setSimulatedCallActive(this, true, data.phoneNumber, state, data.callType)
+        CallStateManager.setSimulatedCallActive(true, data.phoneNumber, state, data.callType)
         
         if (data.callType == CallLog.Calls.MISSED_TYPE) {
             val ringingTime = data.duration?.toInt() ?: 20

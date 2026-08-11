@@ -4,28 +4,40 @@ import android.content.Intent
 import android.os.Build
 import android.telecom.Call
 import android.telecom.InCallService
+import android.util.Log
 import androidx.core.content.ContextCompat
 import com.example.alibi.telecom.CallStateManager
 
 class CallService : InCallService() {
+    
+    private val callCallbacks = mutableMapOf<Call, Call.Callback>()
+
     override fun onCallAdded(call: Call) {
         super.onCallAdded(call)
-        val isSimulated = call.details.accountHandle?.componentName?.packageName == packageName
         
-        // CRITICAL: If this is a simulated call, ignore it here.
-        // Simulated calls are handled exclusively via the CallControl API in TelecomHelper.
-        // Managing them here too causes session deadlocks and ghost notifications.
-        if (isSimulated) return
+        // Comprehensive check for simulation
+        val accountHandle = call.details.accountHandle
+        val isSimulatedByPackage = accountHandle?.componentName?.packageName == packageName
+        val isSimulatedById = accountHandle?.id?.contains("AlibiSimulatedAccount") ?: false
+        val isSimulated = isSimulatedByPackage || isSimulatedById
+        
+        if (isSimulated) {
+            Log.d("CallService", "Simulated call detected. Registering state for UI sync.")
+            CallStateManager.onCallAdded(call, true)
+            return
+        }
 
-        CallStateManager.onCallAdded(call, this, false)
+        CallStateManager.onCallAdded(call, false)
         
         updateNotification(call, false)
         
-        call.registerCallback(object : Call.Callback() {
+        val callback = object : Call.Callback() {
             override fun onStateChanged(call: Call, state: Int) {
                 updateNotification(call, isSimulated)
             }
-        })
+        }
+        callCallbacks[call] = callback
+        call.registerCallback(callback)
         
         CallStateManager.onMuteRequested = { setMuted(it) }
         CallStateManager.onSpeakerRequested = { enabled ->
@@ -36,6 +48,11 @@ class CallService : InCallService() {
 
     override fun onCallRemoved(call: Call) {
         super.onCallRemoved(call)
+        
+        callCallbacks.remove(call)?.let { callback ->
+            call.unregisterCallback(callback)
+        }
+
         // Only cleanup if this service was actually managing the call
         if (CallStateManager.currentCall.value == call) {
             CallStateManager.onCallRemoved(call)

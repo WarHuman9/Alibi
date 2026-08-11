@@ -30,6 +30,8 @@ class CallLogHelper private constructor(private val context: Context) {
         val date: Long,
         val duration: Long,
         val name: String? = null,
+        val formattedNumber: String? = null, // Fallback for Jio/Android 16
+        val numberType: Int = 0,
         val features: Int = 0,
         val phoneAccountId: String? = null,
         val phoneAccountComponent: String? = null,
@@ -37,8 +39,9 @@ class CallLogHelper private constructor(private val context: Context) {
 
     /**
      * Returns a Flow that emits a list of recent calls whenever the call log database changes.
+     * Limit increased to 500 for better performance/reliability trade-off.
      */
-    fun getRecentCallsFlow(limit: Int = 20): Flow<List<CallLogItem>> = callbackFlow {
+    fun getRecentCallsFlow(limit: Int = 500): Flow<List<CallLogItem>> = callbackFlow {
         val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
             override fun onChange(selfChange: Boolean) {
                 val calls = getRecentCalls(limit)
@@ -74,7 +77,7 @@ class CallLogHelper private constructor(private val context: Context) {
      * Fetches the recent calls from the system database.
      * Uses manual limiting to avoid "Invalid token LIMIT" crashes on certain Android versions.
      */
-    fun getRecentCalls(limit: Int = 20): List<CallLogItem> {
+    fun getRecentCalls(limit: Int = 500): List<CallLogItem> {
         val list = mutableListOf<CallLogItem>()
         
         if (ContextCompat.checkSelfPermission(context, android.Manifest.permission.READ_CALL_LOG) != PackageManager.PERMISSION_GRANTED) {
@@ -97,20 +100,27 @@ class CallLogHelper private constructor(private val context: Context) {
                 val dateIdx = it.getColumnIndex(CallLog.Calls.DATE)
                 val durIdx = it.getColumnIndex(CallLog.Calls.DURATION)
                 val nameIdx = it.getColumnIndex(CallLog.Calls.CACHED_NAME)
+                val formatIdx = it.getColumnIndex(CallLog.Calls.CACHED_FORMATTED_NUMBER)
+                val numTypeIdx = it.getColumnIndex(CallLog.Calls.CACHED_NUMBER_TYPE)
                 val featIdx = it.getColumnIndex(CallLog.Calls.FEATURES)
                 val accIdx = it.getColumnIndex(CallLog.Calls.PHONE_ACCOUNT_ID)
                 val compIdx = it.getColumnIndex(CallLog.Calls.PHONE_ACCOUNT_COMPONENT_NAME)
 
                 var count = 0
-                while (it.moveToNext() && count < limit) {
+                while (it.moveToNext() && (count < limit)) {
+                    val rawNumber = it.getString(numIdx)
+                    val cachedFormat = if (formatIdx != -1) it.getString(formatIdx) else null
+                    
                     list.add(
                         CallLogItem(
                             id = it.getLong(idIdx),
-                            number = it.getString(numIdx),
+                            number = rawNumber ?: cachedFormat ?: "Unknown",
                             type = it.getInt(typeIdx),
                             date = it.getLong(dateIdx),
                             duration = it.getLong(durIdx),
                             name = if (nameIdx != -1) it.getString(nameIdx) else null,
+                            formattedNumber = cachedFormat,
+                            numberType = if (numTypeIdx != -1) it.getInt(numTypeIdx) else 0,
                             features = if (featIdx != -1) it.getInt(featIdx) else 0,
                             phoneAccountId = if (accIdx != -1) it.getString(accIdx) else null,
                             phoneAccountComponent = if (compIdx != -1) it.getString(compIdx) else null
@@ -169,6 +179,8 @@ class CallLogHelper private constructor(private val context: Context) {
             CallLog.Calls.DATE,
             CallLog.Calls.DURATION,
             CallLog.Calls.CACHED_NAME,
+            CallLog.Calls.CACHED_FORMATTED_NUMBER,
+            CallLog.Calls.CACHED_NUMBER_TYPE,
             CallLog.Calls.FEATURES,
             CallLog.Calls.PHONE_ACCOUNT_ID,
             CallLog.Calls.PHONE_ACCOUNT_COMPONENT_NAME

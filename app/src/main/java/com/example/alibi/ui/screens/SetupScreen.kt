@@ -5,15 +5,14 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.provider.CallLog
-import android.telecom.PhoneAccountHandle
 import android.telecom.TelecomManager
 import android.text.format.DateFormat
+import android.widget.Toast
 import androidx.activity.compose.ReportDrawnWhen
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
@@ -23,7 +22,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -31,15 +29,19 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.alibi.telecom.CallStateManager
 import com.example.alibi.telecom.TelecomHelper
 import com.example.alibi.util.CallLogHelper
 import com.example.alibi.util.RoleHelper
 import kotlinx.coroutines.delay
+import com.example.alibi.MainActivity
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * Main Setup/Simulate screen. Configures parameters for new simulated calls.
@@ -53,6 +55,7 @@ fun SetupScreen(onNavigateToCall: (String) -> Unit) {
     val callLogHelper = remember { CallLogHelper.getInstance(context) }
     val is24Hour = remember(context) { DateFormat.is24HourFormat(context) }
     
+    val systemStatus = MainActivity.LocalSystemStatus.current
     val isBusy by CallStateManager.isBusy.collectAsStateWithLifecycle()
     val busyMessage by CallStateManager.busyMessage.collectAsStateWithLifecycle()
     
@@ -69,7 +72,7 @@ fun SetupScreen(onNavigateToCall: (String) -> Unit) {
     var showAdvanced by rememberSaveable { mutableStateOf(false) }
     var networkType by rememberSaveable { mutableIntStateOf(0) } // 0: Std, 1: HD
     var callTypeMetadata by rememberSaveable { mutableIntStateOf(0) } // 0: Voice, 1: Video
-    var callOrigin by rememberSaveable { mutableIntStateOf(0) } // 0: Cell, 1: WiFi
+    var callOrigin by rememberSaveable { mutableIntStateOf(0) } // 0: Cell, 1: Wi-Fi
 
     // SIM Selection
     val simAccounts = remember { mutableStateListOf<TelecomHelper.SimAccount>() }
@@ -94,13 +97,14 @@ fun SetupScreen(onNavigateToCall: (String) -> Unit) {
                 timePickerState.hour = now.get(Calendar.HOUR_OF_DAY)
                 timePickerState.minute = now.get(Calendar.MINUTE)
                 selectedSeconds = now.get(Calendar.SECOND)
-                delay(1000)
+                delay(1.seconds)
             }
         }
     }
 
     // --- Lifecycle Sync ---
-    val lifecycleState by androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsStateWithLifecycle()
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val lifecycleState by lifecycleOwner.lifecycle.currentStateFlow.collectAsStateWithLifecycle()
     LaunchedEffect(lifecycleState) {
         isDialerHeld = RoleHelper.isDialerRoleHeld(context)
         val accounts = telecomHelper.getCallCapableSims()
@@ -111,7 +115,7 @@ fun SetupScreen(onNavigateToCall: (String) -> Unit) {
         }
 
         // Automatic Network Detection (Smart Defaults)
-        if (lifecycleState == androidx.lifecycle.Lifecycle.State.RESUMED) {
+        if (lifecycleState == Lifecycle.State.RESUMED) {
             val snapshot = telecomHelper.getNetworkSnapshot()
             if (!showAdvanced) {
                 networkType = if (snapshot.isHdCapable) 1 else 0
@@ -120,13 +124,23 @@ fun SetupScreen(onNavigateToCall: (String) -> Unit) {
         }
     }
 
+    val isReady = systemStatus.isDialerRoleHeld && 
+                 systemStatus.isCallLogGranted && 
+                 systemStatus.isNotificationsGranted && 
+                 systemStatus.isRegistryWarmedUp
+
     // --- Internal Helpers ---
     fun getSelectedTimestamp(): Long = Calendar.getInstance().apply {
-        val dateCal = Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply {
-            timeInMillis = datePickerState.selectedDateMillis ?: System.currentTimeMillis()
-        }
-        set(dateCal.get(Calendar.YEAR), dateCal.get(Calendar.MONTH), dateCal.get(Calendar.DAY_OF_MONTH),
-            timePickerState.hour, timePickerState.minute, selectedSeconds)
+        // Use the system default calendar for both date and time to avoid UTC shifts
+        val selectedDateMillis = datePickerState.selectedDateMillis ?: System.currentTimeMillis()
+        val tempCal = Calendar.getInstance().apply { timeInMillis = selectedDateMillis }
+        
+        set(Calendar.YEAR, tempCal.get(Calendar.YEAR))
+        set(Calendar.MONTH, tempCal.get(Calendar.MONTH))
+        set(Calendar.DAY_OF_MONTH, tempCal.get(Calendar.DAY_OF_MONTH))
+        set(Calendar.HOUR_OF_DAY, timePickerState.hour)
+        set(Calendar.MINUTE, timePickerState.minute)
+        set(Calendar.SECOND, selectedSeconds)
         set(Calendar.MILLISECOND, 0)
     }.timeInMillis
 
@@ -160,15 +174,17 @@ fun SetupScreen(onNavigateToCall: (String) -> Unit) {
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         floatingActionButton = {
-            if (isDialerHeld && phoneNumber.isNotBlank()) {
+            if (isReady && phoneNumber.isNotBlank()) {
                 StartCallFAB(enabled = !isBusy) {
                     val customTime = getSelectedTimestamp()
                     val duration = durationSeconds.toLongOrNull() ?: 60L
                     val features = getFeatureFlags()
-                    if (callDirection == CallLog.Calls.OUTGOING_TYPE) {
-                        telecomHelper.startOutgoingCall(phoneNumber, autoAnswerDelay.toIntOrNull() ?: 0, customTime, duration, selectedSim?.handle, features)
-                    } else {
-                        telecomHelper.startIncomingCall(phoneNumber, callDirection, customTime, duration, selectedSim?.handle, features)
+                    scope.launch {
+                        if (callDirection == CallLog.Calls.OUTGOING_TYPE) {
+                            telecomHelper.startOutgoingCall(phoneNumber, autoAnswerDelay.toIntOrNull() ?: 0, customTime, duration, selectedSim?.handle, features)
+                        } else {
+                            telecomHelper.startIncomingCall(phoneNumber, callDirection, customTime, duration, selectedSim?.handle, features)
+                        }
                     }
                     onNavigateToCall(phoneNumber)
                 }
@@ -177,6 +193,10 @@ fun SetupScreen(onNavigateToCall: (String) -> Unit) {
     ) { padding ->
         Column(modifier = Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp)) {
             SetupHeader()
+
+            SystemStatusDashboard(systemStatus) {
+                (context as? MainActivity)?.triggerRepair()
+            }
 
             if (isBusy && busyMessage != null) BusyBanner(busyMessage!!)
 
@@ -227,7 +247,11 @@ fun SetupScreen(onNavigateToCall: (String) -> Unit) {
                     timePickerState.hour = now.get(Calendar.HOUR_OF_DAY)
                     timePickerState.minute = now.get(Calendar.MINUTE)
                     selectedSeconds = now.get(Calendar.SECOND)
-                    scope.launch { simAccounts.clear(); simAccounts.addAll(telecomHelper.getCallCapableSims()) }
+                    scope.launch { 
+                        val accounts = telecomHelper.getCallCapableSims()
+                        simAccounts.clear()
+                        simAccounts.addAll(accounts)
+                    }
                 }
             )
 
@@ -239,9 +263,11 @@ fun SetupScreen(onNavigateToCall: (String) -> Unit) {
                 onExpandedChange = { expanded ->
                     showAdvanced = expanded
                     if (expanded) {
-                        val snap = telecomHelper.getNetworkSnapshot()
-                        networkType = if (snap.isHdCapable) 1 else 0
-                        callOrigin = if (snap.isWifiCallingActive) 1 else 0
+                        scope.launch {
+                            val snap = telecomHelper.getNetworkSnapshot()
+                            networkType = if (snap.isHdCapable) 1 else 0
+                            callOrigin = if (snap.isWifiCallingActive) 1 else 0
+                        }
                     }
                 },
                 networkType = networkType, onNetworkChange = { networkType = it },
@@ -257,7 +283,7 @@ fun SetupScreen(onNavigateToCall: (String) -> Unit) {
                 onRegisterOnly = {
                     scope.launch {
                         callLogHelper.insertCallLog(phoneNumber, durationSeconds.toLongOrNull() ?: 0L, getSelectedTimestamp(), callDirection, selectedSim?.handle, getFeatureFlags())
-                        android.widget.Toast.makeText(context, "Call registered in log", android.widget.Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "Call registered in log", Toast.LENGTH_SHORT).show()
                     }
                 },
                 canRegister = phoneNumber.isNotBlank()
@@ -267,6 +293,64 @@ fun SetupScreen(onNavigateToCall: (String) -> Unit) {
 }
 
 // --- Sub-Components ---
+
+@Composable
+private fun SystemStatusDashboard(status: MainActivity.SystemStatus, onRepair: () -> Unit) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+        ),
+        modifier = Modifier.padding(vertical = 8.dp).fillMaxWidth()
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Text("System Integration", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.height(8.dp))
+            
+            StatusRow("Default Dialer Role", status.isDialerRoleHeld)
+            StatusRow("Call Log Access", status.isCallLogGranted)
+            StatusRow("Notification Access", status.isNotificationsGranted)
+            StatusRow("Registry Warmed Up", status.isRegistryWarmedUp)
+
+            if (!status.isRegistryWarmedUp && status.isDialerRoleHeld) {
+                Spacer(Modifier.height(12.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (status.isRepairing) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(12.dp))
+                        Text(
+                            "Verifying registry... Please stay in-app.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    } else {
+                        Icon(Icons.Rounded.Warning, null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "Registration pending... Do not close app.", 
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                        Spacer(Modifier.weight(1f))
+                        TextButton(onClick = onRepair) { Text("Repair") }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatusRow(label: String, isOk: Boolean) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        Text(label, style = MaterialTheme.typography.bodySmall)
+        Icon(
+            imageVector = if (isOk) Icons.Rounded.CheckCircle else Icons.Rounded.Cancel,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+            tint = if (isOk) Color(0xFF4CAF50) else MaterialTheme.colorScheme.error
+        )
+    }
+}
 
 @Composable
 private fun SetupHeader() {
