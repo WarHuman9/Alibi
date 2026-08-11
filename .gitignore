@@ -13,6 +13,6 @@
 .externalNativeBuild
 .cxx
 local.properties
-.artifacts
-.agent
-.kotlin
+/.artifacts/
+/.agent/
+/.kotlin/
