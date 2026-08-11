@@ -11,6 +11,7 @@ import android.widget.Toast
 import androidx.activity.compose.ReportDrawnWhen
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.KeyboardOptions
@@ -296,6 +297,8 @@ fun SetupScreen(onNavigateToCall: (String) -> Unit) {
 
 @Composable
 private fun SystemStatusDashboard(status: MainActivity.SystemStatus, onRepair: () -> Unit) {
+    var expanded by rememberSaveable { mutableStateOf(true) }
+    
     Card(
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
@@ -303,35 +306,51 @@ private fun SystemStatusDashboard(status: MainActivity.SystemStatus, onRepair: (
         modifier = Modifier.padding(vertical = 8.dp).fillMaxWidth()
     ) {
         Column(Modifier.padding(16.dp)) {
-            Text("System Integration", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
-            Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded },
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("System Integration", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                Icon(
+                    imageVector = if (expanded) Icons.Rounded.KeyboardArrowUp else Icons.Rounded.KeyboardArrowDown,
+                    contentDescription = if (expanded) "Collapse" else "Expand",
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
             
-            StatusRow("Default Dialer Role", status.isDialerRoleHeld)
-            StatusRow("Call Log Access", status.isCallLogGranted)
-            StatusRow("Notification Access", status.isNotificationsGranted)
-            StatusRow("Registry Warmed Up", status.isRegistryWarmedUp)
+            AnimatedVisibility(visible = expanded) {
+                Column {
+                    Spacer(Modifier.height(8.dp))
+                    
+                    StatusRow("Default Dialer Role", status.isDialerRoleHeld)
+                    StatusRow("Call Log Access", status.isCallLogGranted)
+                    StatusRow("Notification Access", status.isNotificationsGranted)
+                    StatusRow("Registry Warmed Up", status.isRegistryWarmedUp)
 
-            if (!status.isRegistryWarmedUp && status.isDialerRoleHeld) {
-                Spacer(Modifier.height(12.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (status.isRepairing) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                        Spacer(Modifier.width(12.dp))
-                        Text(
-                            "Verifying registry... Please stay in-app.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    } else {
-                        Icon(Icons.Rounded.Warning, null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            "Registration pending... Do not close app.", 
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error
-                        )
-                        Spacer(Modifier.weight(1f))
-                        TextButton(onClick = onRepair) { Text("Repair") }
+                    if (!status.isRegistryWarmedUp && status.isDialerRoleHeld) {
+                        Spacer(Modifier.height(12.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (status.isRepairing) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                Spacer(Modifier.width(12.dp))
+                                Text(
+                                    "Verifying registry... Please stay in-app.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            } else {
+                                Icon(Icons.Rounded.Warning, null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    "Registration pending... Do not close app.", 
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                                Spacer(Modifier.weight(1f))
+                                TextButton(onClick = onRepair) { Text("Repair") }
+                            }
+                        }
                     }
                 }
             }

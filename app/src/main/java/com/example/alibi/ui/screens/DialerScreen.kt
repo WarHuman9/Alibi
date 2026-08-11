@@ -117,32 +117,42 @@ fun DialerScreen(initialNumber: String? = null) {
         )
 
         Box(modifier = Modifier.weight(1f)) {
-            if (isLoading) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator()
-                }
-            } else {
-                when (selectedTab) {
-                    PhoneSubTab.RECENTS -> {
-                        RecentCallsList(
-                            state = listState,
-                            calls = displayCalls.filter { it.number.contains(searchQuery) || (it.name?.contains(searchQuery, true) ?: false) },
-                            sims = simAccounts,
-                            onCallClick = { 
-                                phoneNumber = it
-                                dialPadVisible = true
-                            }
+            AnimatedContent(
+                targetState = isLoading,
+                label = "loading_transition",
+                transitionSpec = { fadeIn() togetherWith fadeOut() }
+            ) { loading ->
+                if (loading) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(48.dp),
+                            color = MaterialTheme.colorScheme.primary,
+                            strokeWidth = 4.dp
                         )
                     }
-                    PhoneSubTab.CONTACTS -> {
-                        ContactsScreen(
-                            searchQuery = searchQuery,
-                            onContactClick = { 
-                                phoneNumber = it
-                                selectedTab = PhoneSubTab.RECENTS
-                                dialPadVisible = true
-                            }
-                        )
+                } else {
+                    when (selectedTab) {
+                        PhoneSubTab.RECENTS -> {
+                            RecentCallsList(
+                                state = listState,
+                                calls = displayCalls.filter { it.number.contains(searchQuery) || (it.name?.contains(searchQuery, true) ?: false) },
+                                sims = simAccounts,
+                                onCallClick = { 
+                                    phoneNumber = it
+                                    dialPadVisible = true
+                                }
+                            )
+                        }
+                        PhoneSubTab.CONTACTS -> {
+                            ContactsScreen(
+                                searchQuery = searchQuery,
+                                onContactClick = { 
+                                    phoneNumber = it
+                                    selectedTab = PhoneSubTab.RECENTS
+                                    dialPadVisible = true
+                                }
+                            )
+                        }
                     }
                 }
             }

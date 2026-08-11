@@ -157,6 +157,9 @@ class CallNotificationService : Service() {
                 })
                 .setContentText(phoneNumber)
                 .setContentIntent(pendingIntent)
+                .setWhen(if (startTime > 0L) startTime else System.currentTimeMillis())
+                .setUsesChronometer(!isMissed && !isDialing)
+                .setShowWhen(!isMissed && !isDialing)
                 // Use PRIORITY_HIGH even for simulated to avoid MIUI hiding it
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setCategory(Notification.CATEGORY_CALL)
