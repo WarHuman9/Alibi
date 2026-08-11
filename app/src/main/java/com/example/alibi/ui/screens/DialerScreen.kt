@@ -65,7 +65,7 @@ fun DialerScreen(initialNumber: String? = null) {
     val recentCalls by if (hasCallLogPermission) {
         callLogHelper.getRecentCallsFlow(500).collectAsStateWithLifecycle(null)
     } else {
-        remember { mutableStateOf(emptyList<CallLogHelper.CallLogItem>()) }
+        remember { mutableStateOf(emptyList()) }
     }
     
     val simAccounts = remember { mutableStateListOf<TelecomHelper.SimAccount>() }

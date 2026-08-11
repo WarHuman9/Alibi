@@ -110,8 +110,8 @@ class TelecomHelper(private val context: Context) {
                     )
                 } else null
             }
-        } catch (e: Exception) {
-            Log.e("TelecomHelper", "Error fetching SIM accounts", e)
+        } catch (_: Exception) {
+            Log.e("TelecomHelper", "Error fetching SIM accounts")
             emptyList()
         }
     }
@@ -158,7 +158,7 @@ class TelecomHelper(private val context: Context) {
         try {
             val account = telecomManager.getPhoneAccount(phoneAccountHandle)
             account != null && account.isEnabled
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             false
         }
     }

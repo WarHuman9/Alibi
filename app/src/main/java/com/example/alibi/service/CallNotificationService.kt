@@ -10,6 +10,7 @@ import android.content.pm.ServiceInfo
 import androidx.core.app.NotificationCompat
 import com.example.alibi.MainActivity
 import com.example.alibi.receiver.CallActionReceiver
+import android.graphics.drawable.Icon as AndroidIcon
 
 class CallNotificationService : Service() {
 
@@ -37,6 +38,7 @@ class CallNotificationService : Service() {
         return START_STICKY
     }
 
+    @SuppressLint("InsecureFullscreenIntent", "FullScreenIntentPolicy")
     private fun showNotification(phoneNumber: String, isIncoming: Boolean, isMissed: Boolean, isDialing: Boolean, isSimulated: Boolean, startTime: Long = 0L) {
         val intent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -118,7 +120,7 @@ class CallNotificationService : Service() {
                 builder.setUsesChronometer(false)
                 
                 val action = Notification.Action.Builder(
-                    android.graphics.drawable.Icon.createWithResource(this, android.R.drawable.ic_menu_close_clear_cancel),
+                    AndroidIcon.createWithResource(this, android.R.drawable.ic_menu_close_clear_cancel),
                     "Hangup", hangupIntent).build()
                 builder.addAction(action)
             } else {
@@ -128,7 +130,7 @@ class CallNotificationService : Service() {
                 builder.setOngoing(false) // Missed call logs should be removable
                 
                 val action = Notification.Action.Builder(
-                    android.graphics.drawable.Icon.createWithResource(this, android.R.drawable.ic_menu_close_clear_cancel),
+                    AndroidIcon.createWithResource(this, android.R.drawable.ic_menu_close_clear_cancel),
                     "Dismiss", hangupIntent).build()
                 builder.addAction(action)
             }

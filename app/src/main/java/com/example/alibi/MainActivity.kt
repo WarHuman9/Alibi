@@ -1,7 +1,6 @@
 package com.example.alibi
 
 import android.app.Activity
-import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
@@ -35,6 +34,8 @@ import com.example.alibi.ui.screens.ActiveCallScreen
 import com.example.alibi.ui.theme.AlibiTheme
 import com.example.alibi.util.RoleHelper
 import android.Manifest
+import android.annotation.SuppressLint
+import android.app.role.RoleManager
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
 
@@ -180,6 +181,7 @@ class MainActivity : ComponentActivity() {
         }
 
         // Start the permission chain
+        @SuppressLint("InlinedApi")
         LaunchedEffect(Unit) {
             val hasNotifications = if (Build.VERSION.SDK_INT >= 33) {
                 ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
@@ -193,7 +195,7 @@ class MainActivity : ComponentActivity() {
             val isRoleHeld = RoleHelper.isDialerRoleHeld(context)
 
             when {
-                !hasNotifications && Build.VERSION.SDK_INT >= 33 -> notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                !hasNotifications -> notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                 !hasCallLog -> callLogPermissionLauncher.launch(Manifest.permission.READ_CALL_LOG)
                 !hasPhoneState || !hasPhoneNumbers -> {
                     val permissions = mutableListOf(Manifest.permission.READ_PHONE_STATE)
@@ -218,7 +220,7 @@ class MainActivity : ComponentActivity() {
         
         lifecycleScope.launch {
             // Heartbeat: Check registry every 1s for 15s
-            for (i in 1..15) {
+            repeat(15) {
                 telecomHelper.registerPhoneAccount()
                 val isWarmed = telecomHelper.isAccountRegistered()
                 if (isWarmed) {
@@ -238,9 +240,9 @@ class MainActivity : ComponentActivity() {
         private fun requestDialerRole(activity: Activity, launcher: androidx.activity.result.ActivityResultLauncher<Intent>) {
             try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    val roleManager = activity.getSystemService(Context.ROLE_SERVICE) as android.app.role.RoleManager
-                    if (roleManager.isRoleAvailable(android.app.role.RoleManager.ROLE_DIALER)) {
-                        launcher.launch(roleManager.createRequestRoleIntent(android.app.role.RoleManager.ROLE_DIALER))
+                    val roleManager = activity.getSystemService(ROLE_SERVICE) as RoleManager
+                    if (roleManager.isRoleAvailable(RoleManager.ROLE_DIALER)) {
+                        launcher.launch(roleManager.createRequestRoleIntent(RoleManager.ROLE_DIALER))
                     }
                 } else {
                     val intent = Intent(TelecomManager.ACTION_CHANGE_DEFAULT_DIALER)
@@ -278,7 +280,7 @@ fun AlibiApp(initialNumber: String? = null) {
         }
     }
 
-    val entryProvider: (androidx.navigation3.runtime.NavKey) -> NavEntry<androidx.navigation3.runtime.NavKey> = remember {
+    val entryProvider: (NavKey) -> NavEntry<NavKey> = remember {
         { key ->
             @Suppress("UNCHECKED_CAST")
             when (key) {

@@ -22,7 +22,7 @@ Utility class to register the `PhoneAccount` and place calls via `TelecomManager
 
 #### [MODIFY] [ActiveCallScreen.kt](file:///C:/Users/santo/AndroidStudioProjects/Alibi/app/src/main/java/com/example/alibi/ui/screens/ActiveCallScreen.kt)
 Enhance the UI to look like a realistic dialer.
-- Add a simulated dialpad.
+- Add a simulated dial pad.
 - Display call duration (timer).
 - Use `ListDetailPaneScaffold` for adaptive layout on larger screens.
 - Use Material 3 Expressive components.
