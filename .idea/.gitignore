@@ -1,6 +1,6 @@
 # Default ignored files
 /shelf/
 /workspace.xml
-/deploymentTargetSelector.xml
 /planningMode.xml
 /caches/
+deploymentTargetSelector.xml
