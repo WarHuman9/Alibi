@@ -3,4 +3,5 @@
 /workspace.xml
 /planningMode.xml
 /caches/
-deploymentTargetSelector.xml
+/deviceManager.xml
+/deploymentTargetSelector.xml
