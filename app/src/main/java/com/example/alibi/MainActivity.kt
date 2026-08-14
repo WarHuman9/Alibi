@@ -60,9 +60,8 @@ class MainActivity : ComponentActivity() {
         // --- Smart System Reset ---
         // Only wipe state if no call is active. This prevents the "Timer Chip" crash.
         if (!CallStateManager.isBusy.value) {
-            Log.d("MainActivity", "Initializing system...")
+            CallStateManager.forceClearState(this)
         }
-
 
         // CRITICAL: Pre-register the simulation account before any call attempts.
         val telecomHelper = TelecomHelper(this)
@@ -260,29 +259,23 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun AlibiApp(initialNumber: String? = null) {
     val backStack = rememberNavBackStack(MainTabsRoute)
-    val activeCalls by CallStateManager.activeCalls.collectAsStateWithLifecycle()
+    val currentCall by CallStateManager.currentCall.collectAsStateWithLifecycle()
+    val isSimulatedCallActive by CallStateManager.isSimulatedCallActive.collectAsStateWithLifecycle()
+    val simulatedPhoneNumber by CallStateManager.simulatedPhoneNumber.collectAsStateWithLifecycle()
 
-    // Global navigation sync: Navigate to Call Screen ONLY for DIALING, RINGING, or ACTIVE calls
-    LaunchedEffect(activeCalls) {
-        val callToShow = activeCalls.values.find {
-            it.state == android.telecom.Call.STATE_DIALING ||
-            it.state == android.telecom.Call.STATE_RINGING ||
-            it.state == android.telecom.Call.STATE_ACTIVE
-        }
-
-        if (callToShow != null) {
-            val phoneNumber = callToShow.number
-            if (backStack.lastOrNull() !is ActiveCallRoute) {
+    // Global navigation sync: If a call becomes active, force navigation to Call Screen
+    LaunchedEffect(currentCall, isSimulatedCallActive, simulatedPhoneNumber) {
+        val isActive = currentCall != null || isSimulatedCallActive
+        if (isActive) {
+            val phoneNumber = currentCall?.details?.handle?.schemeSpecificPart
+                ?: simulatedPhoneNumber
+                ?: "Unknown"
+            if (backStack.isEmpty() || backStack.last() !is ActiveCallRoute) {
                 backStack.add(ActiveCallRoute(phoneNumber))
             }
         } else {
-            // If the map becomes empty OR all calls are DISCONNECTED, return to Setup
-            if (backStack.any { it is ActiveCallRoute }) {
-                Log.d("AlibiApp", "No active calls detected. Clearing backstack to SetupRoute.")
-                // Navigation 3: popUpTo(SetupRoute) { inclusive = true } equivalent:
-                // Clear the backstack and ensure MainTabsRoute (Setup) is the only entry.
-                backStack.clear()
-                backStack.add(MainTabsRoute)
+            if (backStack.isNotEmpty() && backStack.last() is ActiveCallRoute) {
+                backStack.removeLastOrNull()
             }
         }
     }
@@ -294,11 +287,7 @@ fun AlibiApp(initialNumber: String? = null) {
                 is MainTabsRoute -> NavEntry(key) {
                     MainTabScreen(
                         initialNumber = initialNumber,
-                        onNavigateToCall = { phoneNumber ->
-                            if (backStack.isEmpty() || backStack.last() !is ActiveCallRoute) {
-                                backStack.add(ActiveCallRoute(phoneNumber))
-                            }
-                        }
+                        onNavigateToCall = { /* Handled by global effect */ }
                     )
                 } as NavEntry<NavKey>
                 is ActiveCallRoute -> NavEntry(key) {
