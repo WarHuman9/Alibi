@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.launch
 
 /**
  * Utility to interact with the system CallLog database.
@@ -44,8 +45,11 @@ class CallLogHelper private constructor(private val context: Context) {
     fun getRecentCallsFlow(limit: Int = 500): Flow<List<CallLogItem>> = callbackFlow {
         val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
             override fun onChange(selfChange: Boolean) {
-                val calls = getRecentCalls(limit)
-                trySend(calls)
+                // Task 16: Move blocking ContentResolver query to Dispatchers.IO
+                kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+                    val calls = getRecentCalls(limit)
+                    trySend(calls)
+                }
             }
         }
 

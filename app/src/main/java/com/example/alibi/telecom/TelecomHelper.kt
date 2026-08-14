@@ -20,6 +20,7 @@ import com.example.alibi.service.SimulatedConnectionService
 import androidx.core.content.edit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import com.example.alibi.telecom.TelecomConstants.EXTRA_ALIBI_CALL_ID
 import com.example.alibi.telecom.TelecomConstants.EXTRA_AUTO_ANSWER_DELAY
 import com.example.alibi.telecom.TelecomConstants.EXTRA_CALL_FEATURES
 import com.example.alibi.telecom.TelecomConstants.EXTRA_CALL_TYPE
@@ -201,6 +202,7 @@ class TelecomHelper(private val context: Context) {
      * Common logic to pack call metadata into a Bundle.
      */
     private fun createCallBundle(
+        alibiId: String,
         callType: Int,
         customStartTime: Long?,
         durationSeconds: Long?,
@@ -208,6 +210,7 @@ class TelecomHelper(private val context: Context) {
         features: Int,
         autoAnswerDelay: Int = 0
     ): Bundle = Bundle().apply {
+        putString(EXTRA_ALIBI_CALL_ID, alibiId)
         putInt(EXTRA_CALL_TYPE, callType)
         putParcelable(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, phoneAccountHandle)
         
@@ -222,15 +225,25 @@ class TelecomHelper(private val context: Context) {
     suspend fun startIncomingCall(
         phoneNumber: String,
         callType: Int = CallLog.Calls.INCOMING_TYPE,
+        autoAnswerDelay: Int = 0,
         customStartTime: Long? = null,
         durationSeconds: Long? = null,
         mimicSimHandle: PhoneAccountHandle? = null,
         features: Int = 0
     ) = withContext(Dispatchers.IO) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            CallStateManager.forceClearState(context)
-
-            val extras = createCallBundle(callType, customStartTime, durationSeconds, mimicSimHandle, features).apply {
+            val alibiId = "ALIBI_${System.currentTimeMillis()}"
+            
+            // Task 15: Direct Injection - Pre-inject metadata to trigger immediate UI transition
+            CallStateManager.setSimulatedCallActive(
+                active = true,
+                phoneNumber = phoneNumber,
+                state = android.telecom.Call.STATE_RINGING,
+                type = callType,
+                id = alibiId
+            )
+            
+            val extras = createCallBundle(alibiId, callType, customStartTime, durationSeconds, mimicSimHandle, features, autoAnswerDelay).apply {
                 putParcelable(TelecomManager.EXTRA_INCOMING_CALL_ADDRESS, Uri.fromParts("tel", phoneNumber, null))
             }
             
@@ -238,6 +251,8 @@ class TelecomHelper(private val context: Context) {
                 telecomManager.addNewIncomingCall(phoneAccountHandle, extras)
             } catch (e: Exception) {
                 Log.e("TelecomHelper", "Failed to add incoming call", e)
+                // Cleanup optimistic call on failure
+                CallStateManager.removeCall(alibiId)
             }
         }
     }
@@ -250,9 +265,19 @@ class TelecomHelper(private val context: Context) {
         mimicSimHandle: PhoneAccountHandle? = null,
         features: Int = 0
     ) = withContext(Dispatchers.IO) {
-        CallStateManager.forceClearState(context)
+        val alibiId = "ALIBI_${System.currentTimeMillis()}"
+        
+        // Task 15: Direct Injection - Pre-inject metadata to trigger immediate UI transition
+        CallStateManager.setSimulatedCallActive(
+            active = true,
+            phoneNumber = phoneNumber,
+            state = android.telecom.Call.STATE_DIALING,
+            type = CallLog.Calls.OUTGOING_TYPE,
+            id = alibiId
+        )
 
         val extras = createCallBundle(
+            alibiId,
             CallLog.Calls.OUTGOING_TYPE, 
             customStartTime, 
             durationSeconds, 
@@ -273,6 +298,8 @@ class TelecomHelper(private val context: Context) {
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to place outgoing call", e)
+            // Task 15: Cleanup optimistic call on failure
+            CallStateManager.removeCall(alibiId)
         }
     }
 
