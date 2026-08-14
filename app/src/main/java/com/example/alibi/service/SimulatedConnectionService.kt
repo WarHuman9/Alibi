@@ -1,6 +1,5 @@
 package com.example.alibi.service
 
-import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.provider.CallLog
@@ -26,16 +25,18 @@ class SimulatedConnectionService : ConnectionService() {
         request: ConnectionRequest?
     ): Connection {
         Log.d(TAG, "onCreateIncomingConnection: ${request?.address}")
-        val connection = SimulatedConnection(this)
         
-        setupConnection(connection, request)
+        val alibiId = extractAlibiId(request)
+        val connection = SimulatedConnection(this, alibiId)
+        
+        CallStateManager.registerConnection(connection.connectionId, connection)
+        
+        setupConnection(connection, request, alibiId)
         connection.setRinging()
         
         val metadata = extractMetadata(request)
         Log.d(TAG, "Metadata extracted: $metadata")
         applyMetadata(connection, metadata, isIncoming = true)
-        
-        startNotification(metadata, isIncoming = true, isDialing = false)
 
         return connection
     }
@@ -45,17 +46,21 @@ class SimulatedConnectionService : ConnectionService() {
         request: ConnectionRequest?
     ) {
         Log.e(TAG, "onCreateIncomingConnectionFailed")
-        CallStateManager.forceClearState(this)
     }
+
 
     override fun onCreateOutgoingConnection(
         connectionManagerPhoneAccount: PhoneAccountHandle?,
         request: ConnectionRequest?
     ): Connection {
         Log.d(TAG, "onCreateOutgoingConnection: ${request?.address}")
-        val connection = SimulatedConnection(this)
         
-        setupConnection(connection, request)
+        val alibiId = extractAlibiId(request)
+        val connection = SimulatedConnection(this, alibiId)
+        
+        CallStateManager.registerConnection(connection.connectionId, connection)
+        
+        setupConnection(connection, request, alibiId)
         connection.setDialing()
         
         val metadata = extractMetadata(request)
@@ -63,7 +68,6 @@ class SimulatedConnectionService : ConnectionService() {
         applyMetadata(connection, metadata, isIncoming = false)
         
         connection.setAutoAnswerDelay(metadata.autoAnswerDelay)
-        startNotification(metadata, isIncoming = false, isDialing = true)
 
         return connection
     }
@@ -73,13 +77,31 @@ class SimulatedConnectionService : ConnectionService() {
         request: ConnectionRequest?
     ) {
         Log.e(TAG, "onCreateOutgoingConnectionFailed")
-        CallStateManager.forceClearState(this)
     }
+
 
     // --- Private Helpers ---
 
-    private fun setupConnection(connection: Connection, request: ConnectionRequest?) {
+    private fun extractAlibiId(request: ConnectionRequest?): String? {
+        val requestExtras = request?.extras ?: Bundle.EMPTY
+        val nestedExtras = requestExtras.getBundle(TelecomManager.EXTRA_OUTGOING_CALL_EXTRAS) ?: Bundle.EMPTY
+        
+        return requestExtras.getString(com.example.alibi.telecom.TelecomConstants.EXTRA_ALIBI_CALL_ID)
+            ?: nestedExtras.getString(com.example.alibi.telecom.TelecomConstants.EXTRA_ALIBI_CALL_ID)
+    }
+
+    private fun setupConnection(connection: SimulatedConnection, request: ConnectionRequest?, alibiId: String?) {
         connection.setAddress(request?.address, TelecomManager.PRESENTATION_ALLOWED)
+        
+        val extras = connection.extras ?: Bundle()
+        extras.putString(com.example.alibi.telecom.TelecomConstants.EXTRA_CONNECTION_ID, connection.connectionId)
+        
+        if (alibiId != null) {
+            Log.d(TAG, "Propagating Alibi Call ID to Connection extras: $alibiId")
+            extras.putString(com.example.alibi.telecom.TelecomConstants.EXTRA_ALIBI_CALL_ID, alibiId)
+        }
+
+        connection.setExtras(extras)
         connection.setInitializing()
     }
 
@@ -137,23 +159,12 @@ class SimulatedConnectionService : ConnectionService() {
         CallStateManager.setCallFeatures(data.features)
         
         val state = if (isIncoming) Call.STATE_RINGING else Call.STATE_DIALING
-        CallStateManager.setSimulatedCallActive(true, data.phoneNumber, state, data.callType)
+        CallStateManager.setSimulatedCallActive(true, data.phoneNumber, state, data.callType, id = connection.connectionId)
         
         if (data.callType == CallLog.Calls.MISSED_TYPE) {
             val ringingTime = data.duration?.toInt() ?: 20
             connection.setAutoMissDelay(ringingTime)
         }
-    }
-
-    private fun startNotification(data: CallMetadata, isIncoming: Boolean, isDialing: Boolean) {
-        val intent = Intent(this, CallNotificationService::class.java).apply {
-            putExtra(CallNotificationService.EXTRA_PHONE_NUMBER, data.phoneNumber)
-            putExtra(CallNotificationService.EXTRA_IS_INCOMING, isIncoming)
-            putExtra(CallNotificationService.EXTRA_IS_MISSED, data.callType == CallLog.Calls.MISSED_TYPE)
-            putExtra(CallNotificationService.EXTRA_IS_DIALING, isDialing)
-            putExtra(CallNotificationService.EXTRA_IS_SIMULATED, true)
-        }
-        ContextCompat.startForegroundService(this, intent)
     }
 
     private data class CallMetadata(

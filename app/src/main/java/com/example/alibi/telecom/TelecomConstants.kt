@@ -11,6 +11,8 @@ object TelecomConstants {
     const val EXTRA_MIMIC_SIM_HANDLE = "EXTRA_MIMIC_SIM_HANDLE"
     const val EXTRA_CALL_FEATURES = "EXTRA_CALL_FEATURES"
     const val EXTRA_AUTO_ANSWER_DELAY = "EXTRA_AUTO_ANSWER_DELAY"
+    const val EXTRA_CONNECTION_ID = "EXTRA_CONNECTION_ID"
+    const val EXTRA_ALIBI_CALL_ID = "EXTRA_ALIBI_CALL_ID"
     
     // Internal Phone Account ID - Keep this stable to prevent system cache issues.
     const val SIMULATED_ACCOUNT_ID = "AlibiSimulatedAccount_Stable"
