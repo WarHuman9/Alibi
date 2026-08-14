@@ -18,8 +18,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
-import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
-import androidx.window.core.layout.WindowWidthSizeClass
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -68,7 +66,7 @@ fun SetupScreen(onNavigateToCall: (String) -> Unit) {
     var phoneNumber by rememberSaveable { mutableStateOf("") }
     var isDialerHeld by remember { mutableStateOf(RoleHelper.isDialerRoleHeld(context)) }
     var callDirection by rememberSaveable { mutableIntStateOf(CallLog.Calls.INCOMING_TYPE) }
-    var durationSeconds by rememberSaveable { mutableStateOf("") }
+    var durationSeconds by rememberSaveable { mutableStateOf("60") }
     var autoAnswerDelay by rememberSaveable { mutableStateOf("5") }
 
     // Advanced Metadata
@@ -132,9 +130,6 @@ fun SetupScreen(onNavigateToCall: (String) -> Unit) {
                  systemStatus.isNotificationsGranted && 
                  systemStatus.isRegistryWarmedUp
 
-    val windowSizeClass = currentWindowAdaptiveInfo().windowSizeClass
-    val isExpanded = windowSizeClass.windowWidthSizeClass == WindowWidthSizeClass.EXPANDED
-
     // --- Internal Helpers ---
     fun getSelectedTimestamp(): Long = Calendar.getInstance().apply {
         // Use the system default calendar for both date and time to avoid UTC shifts
@@ -183,13 +178,13 @@ fun SetupScreen(onNavigateToCall: (String) -> Unit) {
             if (isReady && phoneNumber.isNotBlank()) {
                 StartCallFAB(enabled = !isBusy) {
                     val customTime = getSelectedTimestamp()
-                    val duration = if (durationSeconds.isBlank() || durationSeconds == "0") 0L else durationSeconds.toLongOrNull() ?: 0L
+                    val duration = durationSeconds.toLongOrNull() ?: 60L
                     val features = getFeatureFlags()
                     scope.launch {
                         if (callDirection == CallLog.Calls.OUTGOING_TYPE) {
                             telecomHelper.startOutgoingCall(phoneNumber, autoAnswerDelay.toIntOrNull() ?: 0, customTime, duration, selectedSim?.handle, features)
                         } else {
-                            telecomHelper.startIncomingCall(phoneNumber, callDirection, autoAnswerDelay.toIntOrNull() ?: 0, customTime, duration, selectedSim?.handle, features)
+                            telecomHelper.startIncomingCall(phoneNumber, callDirection, customTime, duration, selectedSim?.handle, features)
                         }
                     }
                     onNavigateToCall(phoneNumber)
@@ -197,255 +192,104 @@ fun SetupScreen(onNavigateToCall: (String) -> Unit) {
             }
         }
     ) { padding ->
-        Row(
-            modifier = Modifier.padding(padding).fillMaxSize().padding(horizontal = if (isExpanded) 32.dp else 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(24.dp)
-        ) {
-            // Left Column (Status and Main Controls)
-            Column(
-                modifier = Modifier
-                    .weight(if (isExpanded) 1f else 1f)
-                    .verticalScroll(rememberScrollState())
-                    .padding(vertical = 16.dp)
-            ) {
-                SetupHeader()
+        Column(modifier = Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp)) {
+            SetupHeader()
 
-                SystemStatusDashboard(systemStatus) {
-                    (context as? MainActivity)?.triggerRepair()
-                }
-
-                if (isBusy && busyMessage != null) BusyBanner(busyMessage!!)
-
-                if (!isExpanded) {
-                    SetupForm(
-                        callDirection = callDirection,
-                        onCallDirectionChange = { callDirection = it },
-                        simAccounts = simAccounts,
-                        selectedSim = selectedSim,
-                        onSimSelected = { 
-                            selectedSim = it
-                            telecomHelper.setPreferredSimId(it.handle.id)
-                        },
-                        phoneNumber = phoneNumber,
-                        onPhoneNumberChange = { phoneNumber = it },
-                        durationSeconds = durationSeconds,
-                        onDurationChange = { durationSeconds = it },
-                        autoAnswerDelay = autoAnswerDelay,
-                        onDelayChange = { autoAnswerDelay = it },
-                        datePickerState = datePickerState,
-                        timePickerState = timePickerState,
-                        selectedSeconds = selectedSeconds,
-                        onSecondsChange = { selectedSeconds = it; isTimeManuallySet = true },
-                        onShowDatePicker = { showDatePicker = true; isTimeManuallySet = true },
-                        onShowTimePicker = { showTimePicker = true; isTimeManuallySet = true },
-                        onRefreshTime = {
-                            isTimeManuallySet = false
-                            val now = Calendar.getInstance()
-                            datePickerState.selectedDateMillis = now.timeInMillis
-                            timePickerState.hour = now.get(Calendar.HOUR_OF_DAY)
-                            timePickerState.minute = now.get(Calendar.MINUTE)
-                            selectedSeconds = now.get(Calendar.SECOND)
-                            scope.launch { 
-                                val accounts = telecomHelper.getCallCapableSims()
-                                simAccounts.clear()
-                                simAccounts.addAll(accounts)
-                            }
-                        },
-                        showAdvanced = showAdvanced,
-                        onAdvancedExpandedChange = { expanded ->
-                            showAdvanced = expanded
-                            if (expanded) {
-                                scope.launch {
-                                    val snap = telecomHelper.getNetworkSnapshot()
-                                    networkType = if (snap.isHdCapable) 1 else 0
-                                    callOrigin = if (snap.isWifiCallingActive) 1 else 0
-                                }
-                            }
-                        },
-                        networkType = networkType,
-                        onNetworkChange = { networkType = it },
-                        callTypeMetadata = callTypeMetadata,
-                        onCallTypeChange = { callTypeMetadata = it },
-                        callOrigin = callOrigin,
-                        onOriginChange = { callOrigin = it },
-                        isDialerHeld = isDialerHeld,
-                        onRequestRole = { (context as? Activity)?.let { requestDialerRole(it, roleLauncher) } },
-                        onRegisterOnly = {
-                            scope.launch {
-                                callLogHelper.insertCallLog(phoneNumber, durationSeconds.toLongOrNull() ?: 0L, getSelectedTimestamp(), callDirection, selectedSim?.handle, getFeatureFlags())
-                                Toast.makeText(context, "Call registered in log", Toast.LENGTH_SHORT).show()
-                            }
-                        }
-                    )
-                } else {
-                    // In expanded mode, we might want some content on the left and some on the right.
-                    // For now, let's just keep the header and status on the left.
-                    Spacer(Modifier.height(16.dp))
-                    Text("Ready to simulate secure calls. Configure your parameters on the right.", style = MaterialTheme.typography.bodyLarge)
-                }
+            SystemStatusDashboard(systemStatus) {
+                (context as? MainActivity)?.triggerRepair()
             }
 
-            // Right Column (Form in expanded mode)
-            if (isExpanded) {
-                Column(
-                    modifier = Modifier
-                        .weight(1.5f)
-                        .verticalScroll(rememberScrollState())
-                        .padding(vertical = 16.dp)
-                ) {
-                    SetupForm(
-                        callDirection = callDirection,
-                        onCallDirectionChange = { callDirection = it },
-                        simAccounts = simAccounts,
-                        selectedSim = selectedSim,
-                        onSimSelected = { 
-                            selectedSim = it
-                            telecomHelper.setPreferredSimId(it.handle.id)
-                        },
-                        phoneNumber = phoneNumber,
-                        onPhoneNumberChange = { phoneNumber = it },
-                        durationSeconds = durationSeconds,
-                        onDurationChange = { durationSeconds = it },
-                        autoAnswerDelay = autoAnswerDelay,
-                        onDelayChange = { autoAnswerDelay = it },
-                        datePickerState = datePickerState,
-                        timePickerState = timePickerState,
-                        selectedSeconds = selectedSeconds,
-                        onSecondsChange = { selectedSeconds = it; isTimeManuallySet = true },
-                        onShowDatePicker = { showDatePicker = true; isTimeManuallySet = true },
-                        onShowTimePicker = { showTimePicker = true; isTimeManuallySet = true },
-                        onRefreshTime = {
-                            isTimeManuallySet = false
-                            val now = Calendar.getInstance()
-                            datePickerState.selectedDateMillis = now.timeInMillis
-                            timePickerState.hour = now.get(Calendar.HOUR_OF_DAY)
-                            timePickerState.minute = now.get(Calendar.MINUTE)
-                            selectedSeconds = now.get(Calendar.SECOND)
-                        },
-                        showAdvanced = showAdvanced,
-                        onAdvancedExpandedChange = { expanded ->
-                            showAdvanced = expanded
-                            if (expanded) {
-                                scope.launch {
-                                    val snap = telecomHelper.getNetworkSnapshot()
-                                    networkType = if (snap.isHdCapable) 1 else 0
-                                    callOrigin = if (snap.isWifiCallingActive) 1 else 0
-                                }
-                            }
-                        },
-                        networkType = networkType,
-                        onNetworkChange = { networkType = it },
-                        callTypeMetadata = callTypeMetadata,
-                        onCallTypeChange = { callTypeMetadata = it },
-                        callOrigin = callOrigin,
-                        onOriginChange = { callOrigin = it },
-                        isDialerHeld = isDialerHeld,
-                        onRequestRole = { (context as? Activity)?.let { requestDialerRole(it, roleLauncher) } },
-                        onRegisterOnly = {
-                            scope.launch {
-                                callLogHelper.insertCallLog(phoneNumber, durationSeconds.toLongOrNull() ?: 0L, getSelectedTimestamp(), callDirection, selectedSim?.handle, getFeatureFlags())
-                                Toast.makeText(context, "Call registered in log", Toast.LENGTH_SHORT).show()
-                            }
-                        }
-                    )
-                }
-            }
-        }
-    }
-}
+            if (isBusy && busyMessage != null) BusyBanner(busyMessage!!)
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun SetupForm(
-    callDirection: Int,
-    onCallDirectionChange: (Int) -> Unit,
-    simAccounts: List<TelecomHelper.SimAccount>,
-    selectedSim: TelecomHelper.SimAccount?,
-    onSimSelected: (TelecomHelper.SimAccount) -> Unit,
-    phoneNumber: String,
-    onPhoneNumberChange: (String) -> Unit,
-    durationSeconds: String,
-    onDurationChange: (String) -> Unit,
-    autoAnswerDelay: String,
-    onDelayChange: (String) -> Unit,
-    datePickerState: DatePickerState,
-    timePickerState: TimePickerState,
-    selectedSeconds: Int,
-    onSecondsChange: (Int) -> Unit,
-    onShowDatePicker: () -> Unit,
-    onShowTimePicker: () -> Unit,
-    onRefreshTime: () -> Unit,
-    showAdvanced: Boolean,
-    onAdvancedExpandedChange: (Boolean) -> Unit,
-    networkType: Int,
-    onNetworkChange: (Int) -> Unit,
-    callTypeMetadata: Int,
-    onCallTypeChange: (Int) -> Unit,
-    callOrigin: Int,
-    onOriginChange: (Int) -> Unit,
-    isDialerHeld: Boolean,
-    onRequestRole: () -> Unit,
-    onRegisterOnly: () -> Unit
-) {
-    val is24Hour = timePickerState.is24hour
-    val dateFormatter = remember { SimpleDateFormat("MMM dd, yyyy", Locale.getDefault()) }
-    val timeFormatter = remember(is24Hour) { SimpleDateFormat(if (is24Hour) "HH:mm" else "hh:mm a", Locale.getDefault()) }
+            Spacer(Modifier.height(4.dp))
 
-    Column {
-        SectionTitle("Call Direction")
-        DirectionPicker(current = callDirection, onSelected = onCallDirectionChange)
+            SectionTitle("Call Direction")
+            DirectionPicker(current = callDirection, onSelected = { callDirection = it })
 
-        Spacer(Modifier.height(8.dp))
-
-        if (simAccounts.isNotEmpty()) {
-            SectionTitle("SIM Identity")
-            SimPicker(accounts = simAccounts, selected = selectedSim, onSelected = onSimSelected)
             Spacer(Modifier.height(8.dp))
+
+            if (simAccounts.isNotEmpty()) {
+                SectionTitle("SIM Identity")
+                SimPicker(accounts = simAccounts, selected = selectedSim, onSelected = { 
+                    selectedSim = it
+                    telecomHelper.setPreferredSimId(it.handle.id)
+                })
+                Spacer(Modifier.height(8.dp))
+            }
+
+            PhoneNumberField(value = phoneNumber, onValueChange = { phoneNumber = it })
+
+            Spacer(Modifier.height(8.dp))
+
+            DurationFields(
+                duration = durationSeconds, onDurationChange = { durationSeconds = it },
+                showDelay = (callDirection == CallLog.Calls.OUTGOING_TYPE),
+                delay = autoAnswerDelay, onDelayChange = { autoAnswerDelay = it },
+                isMissed = (callDirection == CallLog.Calls.MISSED_TYPE)
+            )
+
+            Spacer(Modifier.height(12.dp))
+            HorizontalDivider(Modifier.padding(vertical = 4.dp))
+            
+            val dateFormatter = remember { SimpleDateFormat("MMM dd, yyyy", Locale.getDefault()) }
+            val timeFormatter = remember(is24Hour) { SimpleDateFormat(if (is24Hour) "HH:mm" else "hh:mm a", Locale.getDefault()) }
+            
+            CustomStartTimeSection(
+                dateText = datePickerState.selectedDateMillis?.let { dateFormatter.format(Date(it)) } ?: "Select Date",
+                timeText = Calendar.getInstance().apply { set(Calendar.HOUR_OF_DAY, timePickerState.hour); set(Calendar.MINUTE, timePickerState.minute) }.let { timeFormatter.format(it.time) },
+                seconds = selectedSeconds,
+                onSecondsChange = { selectedSeconds = it; isTimeManuallySet = true },
+                onShowDatePicker = { showDatePicker = true; isTimeManuallySet = true },
+                onShowTimePicker = { showTimePicker = true; isTimeManuallySet = true },
+                onRefresh = {
+                    isTimeManuallySet = false
+                    val now = Calendar.getInstance()
+                    datePickerState.selectedDateMillis = now.timeInMillis
+                    timePickerState.hour = now.get(Calendar.HOUR_OF_DAY)
+                    timePickerState.minute = now.get(Calendar.MINUTE)
+                    selectedSeconds = now.get(Calendar.SECOND)
+                    scope.launch { 
+                        val accounts = telecomHelper.getCallCapableSims()
+                        simAccounts.clear()
+                        simAccounts.addAll(accounts)
+                    }
+                }
+            )
+
+            Spacer(Modifier.height(8.dp))
+            HorizontalDivider(Modifier.padding(vertical = 4.dp))
+
+            AdvancedDetailsSection(
+                expanded = showAdvanced,
+                onExpandedChange = { expanded ->
+                    showAdvanced = expanded
+                    if (expanded) {
+                        scope.launch {
+                            val snap = telecomHelper.getNetworkSnapshot()
+                            networkType = if (snap.isHdCapable) 1 else 0
+                            callOrigin = if (snap.isWifiCallingActive) 1 else 0
+                        }
+                    }
+                },
+                networkType = networkType, onNetworkChange = { networkType = it },
+                callType = callTypeMetadata, onCallTypeChange = { callTypeMetadata = it },
+                origin = callOrigin, onOriginChange = { callOrigin = it }
+            )
+
+            Spacer(Modifier.height(8.dp))
+
+            DialerRoleSection(
+                isDialerHeld = isDialerHeld,
+                onRequestRole = { (context as? Activity)?.let { requestDialerRole(it, roleLauncher) } },
+                onRegisterOnly = {
+                    scope.launch {
+                        callLogHelper.insertCallLog(phoneNumber, durationSeconds.toLongOrNull() ?: 0L, getSelectedTimestamp(), callDirection, selectedSim?.handle, getFeatureFlags())
+                        Toast.makeText(context, "Call registered in log", Toast.LENGTH_SHORT).show()
+                    }
+                },
+                canRegister = phoneNumber.isNotBlank()
+            )
         }
-
-        PhoneNumberField(value = phoneNumber, onValueChange = onPhoneNumberChange)
-
-        Spacer(Modifier.height(8.dp))
-
-        DurationFields(
-            duration = durationSeconds, onDurationChange = onDurationChange,
-            showDelay = (callDirection == CallLog.Calls.OUTGOING_TYPE),
-            delay = autoAnswerDelay, onDelayChange = onDelayChange,
-            isMissed = (callDirection == CallLog.Calls.MISSED_TYPE)
-        )
-
-        Spacer(Modifier.height(12.dp))
-        HorizontalDivider(Modifier.padding(vertical = 4.dp))
-        
-        CustomStartTimeSection(
-            dateText = datePickerState.selectedDateMillis?.let { dateFormatter.format(Date(it)) } ?: "Select Date",
-            timeText = Calendar.getInstance().apply { set(Calendar.HOUR_OF_DAY, timePickerState.hour); set(Calendar.MINUTE, timePickerState.minute) }.let { timeFormatter.format(it.time) },
-            seconds = selectedSeconds,
-            onSecondsChange = onSecondsChange,
-            onShowDatePicker = onShowDatePicker,
-            onShowTimePicker = onShowTimePicker,
-            onRefresh = onRefreshTime
-        )
-
-        Spacer(Modifier.height(8.dp))
-        HorizontalDivider(Modifier.padding(vertical = 4.dp))
-
-        AdvancedDetailsSection(
-            expanded = showAdvanced,
-            onExpandedChange = onAdvancedExpandedChange,
-            networkType = networkType, onNetworkChange = onNetworkChange,
-            callType = callTypeMetadata, onCallTypeChange = onCallTypeChange,
-            origin = callOrigin, onOriginChange = onOriginChange
-        )
-
-        Spacer(Modifier.height(8.dp))
-
-        DialerRoleSection(
-            isDialerHeld = isDialerHeld,
-            onRequestRole = onRequestRole,
-            onRegisterOnly = onRegisterOnly,
-            canRegister = phoneNumber.isNotBlank()
-        )
     }
 }
 
@@ -588,17 +432,7 @@ private fun PhoneNumberField(value: String, onValueChange: (String) -> Unit) {
 @Composable
 private fun DurationFields(duration: String, onDurationChange: (String) -> Unit, showDelay: Boolean, delay: String, onDelayChange: (String) -> Unit, isMissed: Boolean) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-        OutlinedTextField(
-            value = duration,
-            onValueChange = onDurationChange,
-            label = { Text(if (isMissed) "Ringing Time" else "Duration") },
-            placeholder = { Text("Infinite") },
-            modifier = Modifier.weight(1f),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            singleLine = true,
-            shape = MaterialTheme.shapes.large,
-            supportingText = { if (duration.isBlank() || duration == "0") Text("Infinite duration") }
-        )
+        OutlinedTextField(value = duration, onValueChange = onDurationChange, label = { Text(if (isMissed) "Ringing Time" else "Duration") }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true, shape = MaterialTheme.shapes.large)
         if (showDelay) OutlinedTextField(value = delay, onValueChange = onDelayChange, label = { Text("Delay") }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true, shape = MaterialTheme.shapes.large)
     }
 }
