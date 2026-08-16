@@ -107,44 +107,11 @@ fun ActiveCallScreen(
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         floatingActionButton = {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 32.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // Show Answer button if it's Ringing (Incoming)
-                val showAnswer = callState == Call.STATE_RINGING
-
-                if (showAnswer) {
-                    LargeFloatingActionButton(
-                        onClick = { CallStateManager.answer() },
-                        containerColor = Color(0xFF4CAF50), // Material Green
-                        contentColor = Color.White,
-                        shape = CircleShape
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Check,
-                            contentDescription = "Answer Call",
-                            modifier = Modifier.size(36.dp)
-                        )
-                    }
-                }
-                
-                LargeFloatingActionButton(
-                    onClick = { CallStateManager.disconnect() },
-                    containerColor = MaterialTheme.colorScheme.error,
-                    contentColor = MaterialTheme.colorScheme.onError,
-                    shape = CircleShape
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.CallEnd,
-                        contentDescription = "End Call",
-                        modifier = Modifier.size(36.dp)
-                    )
-                }
-            }
+            CallActionButtons(
+                callState = callState,
+                onAnswer = { CallStateManager.answer() },
+                onHangup = { CallStateManager.disconnect() }
+            )
         },
         floatingActionButtonPosition = FabPosition.Center
     ) { innerPadding ->
@@ -162,44 +129,7 @@ fun ActiveCallScreen(
                 ),
             contentAlignment = Alignment.Center
         ) {
-            // Task 11: High-priority On Hold Badge (Persistent and Non-Clipped)
-            AnimatedVisibility(
-                visible = isHolding,
-                enter = fadeIn() + expandVertically(),
-                exit = fadeOut() + shrinkVertically(),
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = 32.dp)
-                    .zIndex(10f) // Highest priority
-            ) {
-                Surface(
-                    shape = RoundedCornerShape(24.dp),
-                    color = MaterialTheme.colorScheme.errorContainer,
-                    tonalElevation = 8.dp,
-                    shadowElevation = 6.dp
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.MicOff,
-                            contentDescription = null,
-                            modifier = Modifier.size(20.dp),
-                            tint = MaterialTheme.colorScheme.onErrorContainer
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "CALL ON HOLD",
-                            style = MaterialTheme.typography.labelLarge.copy(
-                                fontWeight = FontWeight.ExtraBold,
-                                letterSpacing = 1.2.sp
-                            ),
-                            color = MaterialTheme.colorScheme.onErrorContainer
-                        )
-                    }
-                }
-            }
+            HoldBadge(visible = isHolding)
 
             val contentScale = if (isExpanded) 1.2f else 1f
             Column(
@@ -230,82 +160,23 @@ fun ActiveCallScreen(
 
                 Spacer(modifier = Modifier.height(32.dp))
 
-                Text(
-                    text = statusText,
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.SemiBold
-                )
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                Text(
-                    text = displayPhoneNumber,
-                    style = MaterialTheme.typography.headlineMedium.copy(
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 36.sp
-                    ),
-                    color = MaterialTheme.colorScheme.onBackground
-                )
+                CallHeader(statusText = statusText, phoneNumber = displayPhoneNumber)
 
                 Spacer(modifier = Modifier.height(16.dp))
 
                 // Timer - only visible in ACTIVE phase and not cloaked
-                AnimatedVisibility(
+                CallTimer(
                     visible = callState == Call.STATE_ACTIVE && !isCloaking,
-                    enter = fadeIn() + expandVertically(),
-                    exit = fadeOut() + shrinkVertically()
-                ) {
-                    Text(
-                        text = timeText,
-                        style = MaterialTheme.typography.displaySmall.copy(
-                            fontWeight = FontWeight.Light
-                        ),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                    timeText = timeText
+                )
 
                 // Call Controls - visible in DIALING, RINGING, ACTIVE, or HOLDING
-                AnimatedVisibility(
+                CallControls(
                     visible = callState != Call.STATE_DISCONNECTED,
-                    enter = fadeIn() + expandVertically(),
-                    exit = fadeOut() + shrinkVertically()
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Spacer(modifier = Modifier.height(48.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceEvenly
-                        ) {
-                            FilledTonalIconButton(
-                                onClick = { CallStateManager.toggleMute() },
-                                enabled = !isCloaking,
-                                colors = IconButtonDefaults.filledTonalIconButtonColors(
-                                    containerColor = if (isMuted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
-                                    contentColor = if (isMuted) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            ) {
-                                Icon(
-                                    imageVector = if (isMuted) Icons.Rounded.MicOff else Icons.Rounded.Mic,
-                                    contentDescription = if (isMuted) "Unmute" else "Mute"
-                                )
-                            }
-                            
-                            FilledTonalIconButton(
-                                onClick = { CallStateManager.toggleSpeaker() },
-                                colors = IconButtonDefaults.filledTonalIconButtonColors(
-                                    containerColor = if (speakerOn) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
-                                    contentColor = if (speakerOn) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            ) {
-                                Icon(
-                                    imageVector = if (speakerOn) Icons.AutoMirrored.Rounded.VolumeUp else Icons.AutoMirrored.Rounded.VolumeOff,
-                                    contentDescription = "Speaker"
-                                )
-                            }
-                        }
-                    }
-                }
+                    isMuted = isMuted,
+                    speakerOn = speakerOn,
+                    isCloaking = isCloaking
+                )
 
                 // End Call final duration - only in DISCONNECTED
                 if (callState == Call.STATE_DISCONNECTED) {
@@ -318,6 +189,182 @@ fun ActiveCallScreen(
                     )
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun CallHeader(statusText: String, phoneNumber: String) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(
+            text = statusText,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.SemiBold
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Text(
+            text = phoneNumber,
+            style = MaterialTheme.typography.headlineMedium.copy(
+                fontWeight = FontWeight.Bold,
+                fontSize = 36.sp
+            ),
+            color = MaterialTheme.colorScheme.onBackground
+        )
+    }
+}
+
+@Composable
+private fun CallTimer(visible: Boolean, timeText: String) {
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn() + expandVertically(),
+        exit = fadeOut() + shrinkVertically()
+    ) {
+        Text(
+            text = timeText,
+            style = MaterialTheme.typography.displaySmall.copy(
+                fontWeight = FontWeight.Light
+            ),
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
+private fun CallControls(
+    visible: Boolean,
+    isMuted: Boolean,
+    speakerOn: Boolean,
+    isCloaking: Boolean
+) {
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn() + expandVertically(),
+        exit = fadeOut() + shrinkVertically()
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Spacer(modifier = Modifier.height(48.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                FilledTonalIconButton(
+                    onClick = { CallStateManager.toggleMute() },
+                    enabled = !isCloaking,
+                    colors = IconButtonDefaults.filledTonalIconButtonColors(
+                        containerColor = if (isMuted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                        contentColor = if (isMuted) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                ) {
+                    Icon(
+                        imageVector = if (isMuted) Icons.Rounded.MicOff else Icons.Rounded.Mic,
+                        contentDescription = if (isMuted) "Unmute" else "Mute"
+                    )
+                }
+                
+                FilledTonalIconButton(
+                    onClick = { CallStateManager.toggleSpeaker() },
+                    colors = IconButtonDefaults.filledTonalIconButtonColors(
+                        containerColor = if (speakerOn) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                        contentColor = if (speakerOn) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                ) {
+                    Icon(
+                        imageVector = if (speakerOn) Icons.AutoMirrored.Rounded.VolumeUp else Icons.AutoMirrored.Rounded.VolumeOff,
+                        contentDescription = "Speaker"
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HoldBadge(visible: Boolean) {
+    // Task 11: High-priority On Hold Badge (Persistent and Non-Clipped)
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn() + expandVertically(),
+        exit = fadeOut() + shrinkVertically(),
+        modifier = Modifier
+            .padding(top = 32.dp)
+            .zIndex(10f) // Highest priority
+    ) {
+        Surface(
+            shape = RoundedCornerShape(24.dp),
+            color = MaterialTheme.colorScheme.errorContainer,
+            tonalElevation = 8.dp,
+            shadowElevation = 6.dp
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.MicOff,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                    tint = MaterialTheme.colorScheme.onErrorContainer
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "CALL ON HOLD",
+                    style = MaterialTheme.typography.labelLarge.copy(
+                        fontWeight = FontWeight.ExtraBold,
+                        letterSpacing = 1.2.sp
+                    ),
+                    color = MaterialTheme.colorScheme.onErrorContainer
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CallActionButtons(
+    callState: Int,
+    onAnswer: () -> Unit,
+    onHangup: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 32.dp),
+        horizontalArrangement = Arrangement.SpaceEvenly,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // Show Answer button if it's Ringing (Incoming)
+        val showAnswer = callState == Call.STATE_RINGING
+
+        if (showAnswer) {
+            LargeFloatingActionButton(
+                onClick = onAnswer,
+                containerColor = Color(0xFF4CAF50), // Material Green
+                contentColor = Color.White,
+                shape = CircleShape
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Check,
+                    contentDescription = "Answer Call",
+                    modifier = Modifier.size(36.dp)
+                )
+            }
+        }
+        
+        LargeFloatingActionButton(
+            onClick = onHangup,
+            containerColor = MaterialTheme.colorScheme.error,
+            contentColor = MaterialTheme.colorScheme.onError,
+            shape = CircleShape
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.CallEnd,
+                contentDescription = "End Call",
+                modifier = Modifier.size(36.dp)
+            )
         }
     }
 }

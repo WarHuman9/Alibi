@@ -41,6 +41,7 @@ import com.example.alibi.util.CallLogHelper
 import com.example.alibi.util.RoleHelper
 import kotlinx.coroutines.delay
 import com.example.alibi.MainActivity
+import com.example.alibi.ui.SystemStatus
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
@@ -452,7 +453,7 @@ private fun SetupForm(
 // --- Sub-Components ---
 
 @Composable
-private fun SystemStatusDashboard(status: MainActivity.SystemStatus, onRepair: () -> Unit) {
+private fun SystemStatusDashboard(status: SystemStatus, onRepair: () -> Unit) {
     var expanded by rememberSaveable { mutableStateOf(true) }
     
     Card(

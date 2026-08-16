@@ -80,20 +80,26 @@ class SimulatedConnection(
             
         CallStateManager.setSimulatedCallActive(
             active = true,
-            number = request.phoneNumber,
+            phoneNumber = request.phoneNumber,
             state = initialState,
             type = request.direction,
             id = connectionId
         )
 
-        // 4. Setup auto-actions
+        // 4. Setup state and auto-actions
         if (request.direction == android.provider.CallLog.Calls.OUTGOING_TYPE) {
+            setDialing()
             setAutoAnswerDelay(request.autoAnswerDelay)
             AudioHeartbeatManager.getInstance(context).start()
-        } else if (request.direction == android.provider.CallLog.Calls.MISSED_TYPE) {
-            val ringingTime = request.duration?.toInt() ?: 20
-            setAutoMissDelay(ringingTime)
+        } else {
+            setRinging()
+            if (request.direction == android.provider.CallLog.Calls.MISSED_TYPE) {
+                val ringingTime = request.duration?.toInt() ?: 20
+                setAutoMissDelay(ringingTime)
+            }
         }
+
+        updateNotification()
 
         CallStateManager.onDisconnectRequested = { 
             Log.d(TAG, "onDisconnectRequested callback triggered for $connectionId")
@@ -383,11 +389,22 @@ class SimulatedConnection(
     }
 
     private fun updateNotification() {
-        val phase = CallStateManager.activeCalls.value[connectionId]?.phase
+        val calls = CallStateManager.state.value.activeCalls
+        val metadata = calls[connectionId]
+        val phase = metadata?.phase
         val isDialingPhase = phase == com.example.alibi.telecom.SimulationPhase.DIALING || 
                            phase == com.example.alibi.telecom.SimulationPhase.RINGING
 
         Log.d(TAG, "updateNotification: connectionId=$connectionId, state=$state, phase=$phase")
+
+        // Use answerTime from manager if available to ensure sync with observeCallState
+        val managerAnswerTime = metadata?.answerTime ?: 0L
+        val finalStartTime = when {
+            managerAnswerTime > 0L -> managerAnswerTime
+            localAnswerTime > 0L -> localAnswerTime
+            state == STATE_ACTIVE && !isDialingPhase -> System.currentTimeMillis()
+            else -> 0L
+        }
 
         val intent = Intent(context, CallNotificationService::class.java).apply {
             putExtra(TelecomConstants.EXTRA_CALL_ID, connectionId)
@@ -396,10 +413,8 @@ class SimulatedConnection(
             putExtra(TelecomConstants.EXTRA_IS_DIALING, state == STATE_DIALING || state == STATE_INITIALIZING || isDialingPhase)
             putExtra(TelecomConstants.EXTRA_IS_SIMULATED, true)
             
-            if (localAnswerTime > 0L) {
-                putExtra(TelecomConstants.EXTRA_START_TIME, localAnswerTime)
-            } else if (state == STATE_ACTIVE && !isDialingPhase) {
-                putExtra(TelecomConstants.EXTRA_START_TIME, System.currentTimeMillis())
+            if (finalStartTime > 0L) {
+                putExtra(TelecomConstants.EXTRA_START_TIME, finalStartTime)
             }
         }
         try {

@@ -8,9 +8,9 @@ import android.os.IBinder
 import android.os.PowerManager
 import android.util.Log
 import android.content.pm.ServiceInfo
-import androidx.core.app.NotificationCompat
 import com.example.alibi.MainActivity
 import com.example.alibi.receiver.CallActionReceiver
+import com.example.alibi.service.factory.CallNotificationFactory
 import com.example.alibi.telecom.CallStateManager
 import com.example.alibi.telecom.TelecomConstants
 import kotlinx.coroutines.CoroutineScope
@@ -18,12 +18,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import android.graphics.drawable.Icon as AndroidIcon
 
 class CallNotificationService : Service() {
 
     private var wakeLock: PowerManager.WakeLock? = null
     private lateinit var audioHeartbeatManager: AudioHeartbeatManager
+    private lateinit var notificationFactory: CallNotificationFactory
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var delayedStopJob: kotlinx.coroutines.Job? = null
 
@@ -43,6 +43,7 @@ class CallNotificationService : Service() {
         super.onCreate()
         Log.d(TelecomConstants.NOTIFICATION_TAG, "[${System.currentTimeMillis()}] onCreate: Service created")
         audioHeartbeatManager = AudioHeartbeatManager.getInstance(this)
+        notificationFactory = CallNotificationFactory(this)
         val powerManager = getSystemService(POWER_SERVICE) as PowerManager
         wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, TelecomConstants.WAKE_LOCK_TAG).apply {
             acquire(10 * 60 * 1000L) // 10 minutes max safety
@@ -91,9 +92,9 @@ class CallNotificationService : Service() {
                     if (newState == lastNotificationState) {
                         return@let
                     }
+                    Log.d(TelecomConstants.NOTIFICATION_TAG, "[${System.currentTimeMillis()}] observeCallState: State changed. \n  Old: $lastNotificationState \n  New: $newState")
                     lastNotificationState = newState
 
-                    Log.d(TelecomConstants.NOTIFICATION_TAG, "[${System.currentTimeMillis()}] observeCallState: Updating notification for call ${it.id} (name=${it.name})")
                     showNotification(
                         phoneNumber = it.number,
                         name = it.name,
@@ -116,7 +117,12 @@ class CallNotificationService : Service() {
         intent?.extras?.let { extras ->
             Log.d(TelecomConstants.NOTIFICATION_TAG, "--- onStartCommand Extras Start ---")
             for (key in extras.keySet()) {
-                val value = extras.get(key)
+                val value = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    extras.get(key)
+                } else {
+                    @Suppress("DEPRECATION")
+                    extras.get(key)
+                }
                 Log.d(TelecomConstants.NOTIFICATION_TAG, "  $key = $value (${value?.javaClass?.simpleName})")
             }
             Log.d(TelecomConstants.NOTIFICATION_TAG, "--- onStartCommand Extras End ---")
@@ -141,6 +147,7 @@ class CallNotificationService : Service() {
             val name = it.getStringExtra(TelecomConstants.EXTRA_NAME) ?: phoneNumber
             val isIncoming = it.getBooleanExtra(TelecomConstants.EXTRA_IS_INCOMING, false)
             val isDialing = it.getBooleanExtra(TelecomConstants.EXTRA_IS_DIALING, false)
+            val isMissed = it.getBooleanExtra(TelecomConstants.EXTRA_IS_MISSED, false)
             val isSimulated = it.getBooleanExtra(TelecomConstants.EXTRA_IS_SIMULATED, false)
             val startTime = it.getLongExtra(TelecomConstants.EXTRA_START_TIME, 0L)
             
@@ -150,7 +157,7 @@ class CallNotificationService : Service() {
                 phoneNumber = phoneNumber,
                 name = name,
                 isIncoming = isIncoming,
-                isMissed = false,
+                isMissed = isMissed,
                 isDialing = isDialing,
                 isSimulated = isSimulated,
                 startTime = startTime
@@ -158,6 +165,7 @@ class CallNotificationService : Service() {
             if (newState == lastNotificationState) {
                 return START_STICKY
             }
+            Log.d(TelecomConstants.NOTIFICATION_TAG, "[${System.currentTimeMillis()}] onStartCommand: State changed. \n  Old: $lastNotificationState \n  New: $newState")
             lastNotificationState = newState
 
             // Active Verification: Check if call still exists in manager
@@ -176,7 +184,7 @@ class CallNotificationService : Service() {
                 phoneNumber = phoneNumber,
                 name = name,
                 isIncoming = isIncoming,
-                isMissed = false,
+                isMissed = isMissed,
                 isDialing = isDialing,
                 isSimulated = isSimulated,
                 startTime = startTime,
@@ -189,8 +197,6 @@ class CallNotificationService : Service() {
 
     @SuppressLint("InsecureFullscreenIntent", "FullScreenIntentPolicy")
     private fun showNotification(phoneNumber: String, name: String, isIncoming: Boolean, isMissed: Boolean, isDialing: Boolean, isSimulated: Boolean, startTime: Long = 0L, callId: String? = null) {
-        val requestTime = System.currentTimeMillis()
-        
         // Build notification on background thread to avoid main thread jank ("Davey!")
         serviceScope.launch(Dispatchers.Default) {
             val startTimeBuild = System.currentTimeMillis()
@@ -207,142 +213,19 @@ class CallNotificationService : Service() {
             // Task 16: If we are showing a notification, we definitely shouldn't be stopping
             cancelDelayedStop()
             
-            val intent = Intent(this@CallNotificationService, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            }
-            val pendingIntent = PendingIntent.getActivity(
-                this@CallNotificationService, 
-                0, 
-                intent, 
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-
             // All simulated calls use the silent channel to stay in the shade without pushing
             val channelId = if (isSimulated) CHANNEL_ID_SILENT else CHANNEL_ID
 
-            val notification = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                val person = Person.Builder()
-                    .setName(name)
-                    .setImportant(true)
-                    .build()
-
-                val hangupIntent = PendingIntent.getBroadcast(
-                    this@CallNotificationService, 1, 
-                    Intent(this@CallNotificationService, CallActionReceiver::class.java).apply { action = TelecomConstants.ACTION_HANGUP }, 
-                    PendingIntent.FLAG_IMMUTABLE
-                )
-                val answerIntent = PendingIntent.getBroadcast(
-                    this@CallNotificationService, 2, 
-                    Intent(this@CallNotificationService, CallActionReceiver::class.java).apply { action = TelecomConstants.ACTION_ANSWER }, 
-                    PendingIntent.FLAG_IMMUTABLE
-                )
-
-                val builder = Notification.Builder(this@CallNotificationService, channelId)
-                    .setSmallIcon(android.R.drawable.ic_menu_call)
-                    .setContentTitle(when {
-                        isMissed -> "Missed call"
-                        isDialing -> "Calling..."
-                        isIncoming -> "Incoming call..."
-                        else -> "Active call"
-                    })
-                    .setContentText(phoneNumber)
-                    .setContentIntent(pendingIntent)
-                    .setOngoing(true)
-                    .setLocalOnly(true)
-                    .setOnlyAlertOnce(true)
-                    .setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
-                    .setCategory(Notification.CATEGORY_CALL)
-
-                // Tiered Notification Strategy:
-                // 1. Ringing (Incoming): CallStyle.forIncomingCall -> Colorful buttons, NO timer.
-                // 2. Active/Connecting (Ongoing/Outgoing): CallStyle.forOngoingCall -> Colorful button, WITH timer.
-                // 3. Missed: Standard Notification -> Standard buttons.
-                
-                val isRinging = isIncoming && !isMissed && !isDialing
-                val isActive = !isIncoming && !isMissed && !isDialing
-                val isConnecting = isDialing && !isMissed
-
-                val canUseFullScreen = canUseFullScreenIntent()
-
-                if (isRinging && !isSimulated) {
-                    // Real incoming call gets full screen intent priority if permitted
-                    if (canUseFullScreen) {
-                        builder.setFullScreenIntent(pendingIntent, true)
-                    }
-                }
-
-                if (isRinging) {
-                    builder.style = Notification.CallStyle.forIncomingCall(person, hangupIntent, answerIntent)
-                } else if (isActive) {
-                    // ONLY use CallStyle.forOngoingCall when call is truly ACTIVE
-                    // This prevents Android 16 from showing the status bar timer/hangup chip too early.
-                    val finalStartTime = if (startTime > 0L) startTime else System.currentTimeMillis()
-                    builder.setWhen(finalStartTime)
-                    builder.setUsesChronometer(true)
-                    builder.setShowWhen(true)
-                    builder.style = Notification.CallStyle.forOngoingCall(person, hangupIntent)
-                } else if (isConnecting) {
-                    // Connecting/Dialing phase uses Standard Notification to remain sticky 
-                    // but avoids triggering the system "Active Call" chip.
-                    builder.setShowWhen(false)
-                    builder.setUsesChronometer(false)
-                    
-                    val action = Notification.Action.Builder(
-                        AndroidIcon.createWithResource(this@CallNotificationService, android.R.drawable.ic_menu_close_clear_cancel),
-                        "Hangup", hangupIntent).build()
-                    builder.addAction(action)
-                } else {
-                    // Missed - Use standard notification
-                    builder.setShowWhen(false)
-                    builder.setUsesChronometer(false)
-                    builder.setOngoing(false) // Missed call logs should be removable
-                    
-                    val action = Notification.Action.Builder(
-                        AndroidIcon.createWithResource(this@CallNotificationService, android.R.drawable.ic_menu_close_clear_cancel),
-                        "Dismiss", hangupIntent).build()
-                    builder.addAction(action)
-                }
-                
-                builder.build()
-            } else {
-                val hangupIntent = PendingIntent.getBroadcast(
-                    this@CallNotificationService, 1, 
-                    Intent(this@CallNotificationService, CallActionReceiver::class.java).apply { action = TelecomConstants.ACTION_HANGUP }, 
-                    PendingIntent.FLAG_IMMUTABLE
-                )
-                val answerIntent = PendingIntent.getBroadcast(
-                    this@CallNotificationService, 2, 
-                    Intent(this@CallNotificationService, CallActionReceiver::class.java).apply { action = TelecomConstants.ACTION_ANSWER }, 
-                    PendingIntent.FLAG_IMMUTABLE
-                )
-
-                NotificationCompat.Builder(this@CallNotificationService, channelId)
-                    .setSmallIcon(android.R.drawable.ic_menu_call)
-                    .setContentTitle(when {
-                        isMissed -> "Missed call"
-                        isDialing -> "Calling..."
-                        isIncoming -> "Incoming call..."
-                        else -> "Active call"
-                    })
-                    .setContentText(phoneNumber)
-                    .setContentIntent(pendingIntent)
-                    .setWhen(if (startTime > 0L) startTime else System.currentTimeMillis())
-                    .setUsesChronometer(!isMissed && !isDialing)
-                    .setShowWhen(!isMissed && !isDialing)
-                    // Use PRIORITY_HIGH even for simulated to avoid MIUI hiding it
-                    .setPriority(NotificationCompat.PRIORITY_HIGH)
-                    .setCategory(Notification.CATEGORY_CALL)
-                    .setOngoing(!isMissed)
-                    .addAction(android.R.drawable.ic_menu_close_clear_cancel, if (isMissed) "Dismiss" else "Hangup", hangupIntent)
-                    .apply {
-                        if (isIncoming && !isMissed) addAction(android.R.drawable.ic_menu_call, "Answer", answerIntent)
-                        
-                        if (!isSimulated && canUseFullScreenIntent()) {
-                            setFullScreenIntent(pendingIntent, true)
-                        }
-                    }
-                    .build()
-            }
+            val notification = notificationFactory.createNotification(
+                phoneNumber = phoneNumber,
+                name = name,
+                isIncoming = isIncoming,
+                isMissed = isMissed,
+                isDialing = isDialing,
+                isSimulated = isSimulated,
+                startTime = startTime,
+                channelId = channelId
+            )
 
             withContext(Dispatchers.Main) {
                 val startTimeForeground = System.currentTimeMillis()
@@ -369,17 +252,6 @@ class CallNotificationService : Service() {
     }
 
     @SuppressLint("NewApi")
-    private fun canUseFullScreenIntent(): Boolean {
-        // Use a more resilient check to satisfy the toolchain analyzer
-        val version = Build.VERSION.SDK_INT
-        return if (version >= 34) {
-            val manager = getSystemService(NotificationManager::class.java)
-            manager.canUseFullScreenIntent()
-        } else {
-            true
-        }
-    }
-
     private fun createNotificationChannels() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val manager = getSystemService(NotificationManager::class.java)
@@ -405,7 +277,7 @@ class CallNotificationService : Service() {
     private fun startDelayedStopCheck() {
         cancelDelayedStop()
         delayedStopJob = serviceScope.launch {
-            kotlinx.coroutines.delay(5000) // 5 seconds grace period
+            kotlinx.coroutines.delay(5000L) // 5 seconds grace period
             if (CallStateManager.activeCalls.value.isEmpty()) {
                 Log.d(TelecomConstants.NOTIFICATION_TAG, "Delayed stop check: Still no calls. Stopping service.")
                 stopSelf()
