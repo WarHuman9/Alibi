@@ -10,7 +10,9 @@ import android.os.Looper
 import android.provider.CallLog
 import android.util.Log
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -23,6 +25,8 @@ import kotlinx.coroutines.launch
  * Provides reactive flows and safe insertion methods.
  */
 class CallLogHelper private constructor(private val context: Context) {
+
+    private val helperScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     data class CallLogItem(
         val id: Long,
@@ -142,33 +146,41 @@ class CallLogHelper private constructor(private val context: Context) {
     /**
      * Inserts a call record into the system call log.
      */
-    suspend fun insertCallLog(
+    fun insertCallLog(
         phoneNumber: String,
         duration: Long,
         timestamp: Long,
         callType: Int,
         simHandle: android.telecom.PhoneAccountHandle? = null,
         features: Int = 0
-    ) = withContext(Dispatchers.IO) {
-        try {
-            val values = ContentValues().apply {
-                put(CallLog.Calls.NUMBER, phoneNumber)
-                put(CallLog.Calls.DATE, timestamp)
-                put(CallLog.Calls.DURATION, duration)
-                put(CallLog.Calls.TYPE, callType)
-                put(CallLog.Calls.NEW, 1)
-                put(CallLog.Calls.FEATURES, features)
-                
-                if (simHandle != null) {
-                    put(CallLog.Calls.PHONE_ACCOUNT_COMPONENT_NAME, simHandle.componentName.flattenToString())
-                    put(CallLog.Calls.PHONE_ACCOUNT_ID, simHandle.id)
+    ) {
+        Log.d(TAG, "insertCallLog: Request received for $phoneNumber (duration=$duration, type=$callType)")
+        helperScope.launch {
+            try {
+                Log.d(TAG, "insertCallLog: Started writing to ContentResolver for $phoneNumber")
+                val values = ContentValues().apply {
+                    put(CallLog.Calls.NUMBER, phoneNumber)
+                    put(CallLog.Calls.DATE, timestamp)
+                    put(CallLog.Calls.DURATION, duration)
+                    put(CallLog.Calls.TYPE, callType)
+                    put(CallLog.Calls.NEW, 1)
+                    put(CallLog.Calls.FEATURES, features)
+                    
+                    if (simHandle != null) {
+                        put(CallLog.Calls.PHONE_ACCOUNT_COMPONENT_NAME, simHandle.componentName.flattenToString())
+                        put(CallLog.Calls.PHONE_ACCOUNT_ID, simHandle.id)
+                    }
                 }
-            }
 
-            val uri = context.contentResolver.insert(CallLog.Calls.CONTENT_URI, values)
-            Log.d(TAG, "Call log inserted successfully: $uri")
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to insert call log", e)
+                val uri = context.contentResolver.insert(CallLog.Calls.CONTENT_URI, values)
+                if (uri != null) {
+                    Log.d(TAG, "insertCallLog: Success! Call log inserted: $uri")
+                } else {
+                    Log.e(TAG, "insertCallLog: Fail. ContentResolver returned null URI for $phoneNumber")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "insertCallLog: Fail. Exception while inserting call log for $phoneNumber", e)
+            }
         }
     }
 

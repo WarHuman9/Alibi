@@ -2,14 +2,20 @@ package com.example.alibi.service
 
 import android.content.Context
 import android.content.Intent
+import android.os.Build
+import android.os.Bundle
 import android.telecom.Call
 import android.telecom.Connection
 import android.telecom.DisconnectCause
 import android.telecom.PhoneAccountHandle
+import android.telecom.TelecomManager
 import android.util.Log
-import android.os.Build
 import androidx.core.content.ContextCompat
+import com.example.alibi.telecom.CallLogSnapshot
 import com.example.alibi.telecom.CallStateManager
+import com.example.alibi.telecom.SimulatedCallRequest
+import com.example.alibi.telecom.SimulationPhase
+import com.example.alibi.telecom.TelecomConstants
 import kotlinx.coroutines.*
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.time.Duration.Companion.milliseconds
@@ -19,16 +25,16 @@ import kotlin.time.Duration.Companion.seconds
  * Custom [Connection] for simulated calls.
  * Manages local metadata to ensure accurate logging even if global state is reset.
  */
-class SimulatedConnection(private val context: Context, id: String? = null) : Connection() {
+class SimulatedConnection(
+    private val context: Context,
+    val request: SimulatedCallRequest
+) : Connection() {
 
-    val connectionId = id ?: java.util.UUID.randomUUID().toString()
+    val connectionId = request.alibiId
     private val connectionScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private val isDestroyed = AtomicBoolean(false)
     private val isSimulationAnswered = AtomicBoolean(false)
-    private var durationJob: Job? = null
-    private var cloakingJob: Job? = null
-    private var autoAnswerJob: Job? = null
-    private var autoMissJob: Job? = null
+    private val activeJobs = mutableMapOf<String, Job>()
     private var stateBeforeHold: Int = STATE_ACTIVE
 
     // Captured metadata for atomic logging
@@ -45,11 +51,49 @@ class SimulatedConnection(private val context: Context, id: String? = null) : Co
         connectionCapabilities = CAPABILITY_SUPPORT_HOLD or CAPABILITY_HOLD
         audioModeIsVoip = true
         
-        localStartTime = System.currentTimeMillis()
+        // 1. Initial Telecom state & metadata propagation
+        setInitializing()
+        setAddress(android.net.Uri.fromParts("tel", request.phoneNumber, null), TelecomManager.PRESENTATION_ALLOWED)
+        
+        val ex = extras ?: Bundle()
+        ex.putString(TelecomConstants.EXTRA_CONNECTION_ID, connectionId)
+        ex.putString(TelecomConstants.EXTRA_ALIBI_CALL_ID, connectionId)
+        setExtras(ex)
 
-        // Task 15: Register and push initial state immediately
+        // 2. Capture local metadata for atomic logging
+        localPhoneNumber = request.phoneNumber
+        localStartTime = request.startTime ?: System.currentTimeMillis()
+        localCallType = request.direction
+        localIntendedDuration = request.duration
+        localMimicSimHandle = request.simHandle
+        localCallFeatures = request.features
+
+        // 3. Sync with CallStateManager
         CallStateManager.registerConnection(connectionId, this)
-        CallStateManager.updateCallState(connectionId, Call.STATE_CONNECTING)
+        CallStateManager.setCustomStartTime(request.startTime)
+        CallStateManager.setIntendedDuration(request.duration)
+        CallStateManager.setMimicSimHandle(request.simHandle)
+        CallStateManager.setCallFeatures(request.features)
+        
+        val initialState = if (request.direction == android.provider.CallLog.Calls.OUTGOING_TYPE) 
+            Call.STATE_DIALING else Call.STATE_RINGING
+            
+        CallStateManager.setSimulatedCallActive(
+            active = true,
+            number = request.phoneNumber,
+            state = initialState,
+            type = request.direction,
+            id = connectionId
+        )
+
+        // 4. Setup auto-actions
+        if (request.direction == android.provider.CallLog.Calls.OUTGOING_TYPE) {
+            setAutoAnswerDelay(request.autoAnswerDelay)
+            AudioHeartbeatManager.getInstance(context).start()
+        } else if (request.direction == android.provider.CallLog.Calls.MISSED_TYPE) {
+            val ringingTime = request.duration?.toInt() ?: 20
+            setAutoMissDelay(ringingTime)
+        }
 
         CallStateManager.onDisconnectRequested = { 
             Log.d(TAG, "onDisconnectRequested callback triggered for $connectionId")
@@ -86,9 +130,7 @@ class SimulatedConnection(private val context: Context, id: String? = null) : Co
 
     private fun startCloakingWatchdog() {
         if (Build.VERSION.SDK_INT >= 35) { // Android 15/16+
-            cloakingJob = connectionScope.launch {
-                // Cloak after 40 seconds to beat the system inactivity watchdog reliably (API 35+)
-                delay(40.seconds)
+            startTimer("cloaking", 40000L) {
                 if (state == STATE_DIALING || state == STATE_RINGING) {
                     Log.i(TAG, "Watchdog: Cloaking call state to ACTIVE to avoid system kill (API 35+).")
                     setActive()
@@ -96,6 +138,15 @@ class SimulatedConnection(private val context: Context, id: String? = null) : Co
                     CallStateManager.onMuteRequested?.invoke(true)
                 }
             }
+        }
+    }
+
+    private fun startTimer(type: String, delayMillis: Long, onFinish: suspend () -> Unit) {
+        activeJobs[type]?.cancel()
+        activeJobs[type] = connectionScope.launch {
+            delay(delayMillis)
+            onFinish()
+            activeJobs.remove(type)
         }
     }
 
@@ -124,9 +175,8 @@ class SimulatedConnection(private val context: Context, id: String? = null) : Co
 
     fun setAutoAnswerDelay(seconds: Int) {
         if (seconds < 0) return
-        autoAnswerJob?.cancel()
-        autoAnswerJob = connectionScope.launch {
-            delay(if (seconds > 0) seconds.seconds else 500.milliseconds)
+        val delay = if (seconds > 0) seconds * 1000L else 500L
+        startTimer("autoAnswer", delay) {
             if (!isSimulationAnswered.get() && state != STATE_DISCONNECTED) {
                 Log.d(TAG, "Auto-answering call after delay: $seconds s")
                 onAnswer()
@@ -136,9 +186,7 @@ class SimulatedConnection(private val context: Context, id: String? = null) : Co
 
     fun setAutoMissDelay(seconds: Int) {
         if (seconds <= 0) return
-        autoMissJob?.cancel()
-        autoMissJob = connectionScope.launch {
-            delay(seconds.seconds)
+        startTimer("autoMiss", seconds * 1000L) {
             if (!isSimulationAnswered.get() && state != STATE_DISCONNECTED) {
                 Log.d(TAG, "Auto-missing call after delay: $seconds s")
                 onReject()
@@ -158,13 +206,12 @@ class SimulatedConnection(private val context: Context, id: String? = null) : Co
         localAnswerTime = System.currentTimeMillis()
 
         // Cancel all watchdog and transition timers
-
-        cloakingJob?.cancel()
-        cloakingJob = null
-        autoAnswerJob?.cancel()
-        autoAnswerJob = null
-        autoMissJob?.cancel()
-        autoMissJob = null
+        activeJobs["cloaking"]?.cancel()
+        activeJobs.remove("cloaking")
+        activeJobs["autoAnswer"]?.cancel()
+        activeJobs.remove("autoAnswer")
+        activeJobs["autoMiss"]?.cancel()
+        activeJobs.remove("autoMiss")
 
         if (!wasCloaked) {
             setActive()
@@ -183,10 +230,7 @@ class SimulatedConnection(private val context: Context, id: String? = null) : Co
         
         // Start automatic hang-up timer if duration is set and positive
         localIntendedDuration?.takeIf { it > 0 }?.let { duration ->
-            durationJob?.cancel()
-            durationJob = connectionScope.launch {
-                Log.d(TAG, "Starting automatic hang-up timer: $duration seconds")
-                delay(duration.seconds)
+            startTimer("duration", duration * 1000L) {
                 Log.d(TAG, "Intended duration reached. Automatically hanging up.")
                 onDisconnect()
             }
@@ -224,26 +268,20 @@ class SimulatedConnection(private val context: Context, id: String? = null) : Co
         Log.d(TAG, "Cleanup initiated for connection: $connectionId")
 
         // Task 11/12: Capture snapshot using LOCAL properties for atomic accuracy
-        val snapshot = CallStateManager.CallMetadata(
+        val snapshot = CallLogSnapshot(
             number = localPhoneNumber ?: address?.schemeSpecificPart ?: "Unknown",
             type = localCallType,
             startTime = if (localStartTime > 0) localStartTime else System.currentTimeMillis(),
             answerTime = localAnswerTime,
             endTime = System.currentTimeMillis(),
             simHandle = localMimicSimHandle,
-            features = localCallFeatures
+            features = localCallFeatures,
+            isSimulated = true
         )
 
         // 1. Cancel all ongoing timers immediately
-
-        durationJob?.cancel()
-        durationJob = null
-        cloakingJob?.cancel()
-        cloakingJob = null
-        autoAnswerJob?.cancel()
-        autoAnswerJob = null
-        autoMissJob?.cancel()
-        autoMissJob = null
+        activeJobs.values.forEach { it.cancel() }
+        activeJobs.clear()
         
         // 2. Audio and Heartbeat stop immediately
         AudioHeartbeatManager.getInstance(context).connection = null
@@ -352,16 +390,16 @@ class SimulatedConnection(private val context: Context, id: String? = null) : Co
         Log.d(TAG, "updateNotification: connectionId=$connectionId, state=$state, phase=$phase")
 
         val intent = Intent(context, CallNotificationService::class.java).apply {
-            putExtra(CallNotificationService.EXTRA_CALL_ID, connectionId)
-            putExtra(CallNotificationService.EXTRA_PHONE_NUMBER, localPhoneNumber ?: address?.schemeSpecificPart)
-            putExtra(CallNotificationService.EXTRA_IS_INCOMING, state == STATE_RINGING || phase == com.example.alibi.telecom.SimulationPhase.RINGING)
-            putExtra(CallNotificationService.EXTRA_IS_DIALING, state == STATE_DIALING || state == STATE_INITIALIZING || isDialingPhase)
-            putExtra(CallNotificationService.EXTRA_IS_SIMULATED, true)
+            putExtra(TelecomConstants.EXTRA_CALL_ID, connectionId)
+            putExtra(TelecomConstants.EXTRA_PHONE_NUMBER, localPhoneNumber ?: address?.schemeSpecificPart)
+            putExtra(TelecomConstants.EXTRA_IS_INCOMING, state == STATE_RINGING || phase == com.example.alibi.telecom.SimulationPhase.RINGING)
+            putExtra(TelecomConstants.EXTRA_IS_DIALING, state == STATE_DIALING || state == STATE_INITIALIZING || isDialingPhase)
+            putExtra(TelecomConstants.EXTRA_IS_SIMULATED, true)
             
             if (localAnswerTime > 0L) {
-                putExtra(CallNotificationService.EXTRA_START_TIME, localAnswerTime)
+                putExtra(TelecomConstants.EXTRA_START_TIME, localAnswerTime)
             } else if (state == STATE_ACTIVE && !isDialingPhase) {
-                putExtra(CallNotificationService.EXTRA_START_TIME, System.currentTimeMillis())
+                putExtra(TelecomConstants.EXTRA_START_TIME, System.currentTimeMillis())
             }
         }
         try {

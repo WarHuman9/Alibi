@@ -7,21 +7,31 @@ import android.telecom.InCallService
 import android.util.Log
 import androidx.core.content.ContextCompat
 import com.example.alibi.telecom.CallStateManager
+import com.example.alibi.telecom.TelecomConstants
+
+import com.example.alibi.util.CallAudioRouteManager
+import com.example.alibi.util.CallUiManager
 
 class CallService : InCallService() {
     
     private val callCallbacks = mutableMapOf<Call, Call.Callback>()
-    private val launchedUiForCalls = mutableSetOf<String>()
     private val registeredCallIds = mutableSetOf<Int>()
     private lateinit var backgroundThread: android.os.HandlerThread
     private lateinit var backgroundHandler: android.os.Handler
+    
+    private lateinit var uiManager: CallUiManager
+    private lateinit var audioRouteManager: CallAudioRouteManager
 
     override fun onCreate() {
         super.onCreate()
-        backgroundThread = android.os.HandlerThread("Alibi_CallService_Bg")
+        backgroundThread = android.os.HandlerThread(TelecomConstants.CALL_SERVICE_BG_THREAD)
         backgroundThread.start()
         backgroundHandler = android.os.Handler(backgroundThread.looper)
-        Log.d("Alibi_CallService", "onCreate: Background thread started")
+        
+        uiManager = CallUiManager(this)
+        audioRouteManager = CallAudioRouteManager(this)
+        
+        Log.d("Alibi_CallService", "onCreate: Background thread and managers initialized")
     }
 
     override fun onDestroy() {
@@ -55,56 +65,25 @@ class CallService : InCallService() {
         Log.d("Alibi_CallService", "Resolved Call ID: $id (isSimulated=$isSimulated, byHandle=$isSimulatedByHandle)")
 
         // Register with manager BEFORE triggering notification intent
-        // Using backgroundHandler for the callback registration to keep Main thread responsive
         CallStateManager.onCallAdded(call, isSimulated, backgroundHandler)
         
         // Task 18: One-time notification start. 
-        // Subsequent updates are handled by CallNotificationService observing the state flow.
         updateNotification(call, isSimulated)
 
-        if (!isSimulated && !launchedUiForCalls.contains(id)) {
-            Log.d("Alibi_CallService", "Real call detected. Launching MainActivity selective UI for $id")
-            launchedUiForCalls.add(id)
-            val uiIntent = Intent(this, com.example.alibi.MainActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                putExtra("EXTRA_REAL_CALL", true)
-            }
-            
-            val pendingIntent = android.app.PendingIntent.getActivity(
-                this, 0, uiIntent, 
-                android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
-            )
-            try {
-                Log.d("Alibi_CallService", "Sending PendingIntent for real call UI.")
-                pendingIntent.send()
-            } catch (e: Exception) {
-                Log.e("Alibi_CallService", "Failed to send PendingIntent, falling back to startActivity", e)
-                startActivity(uiIntent)
-            }
+        if (!isSimulated) {
+            uiManager.showRealCallUi(id)
         }
 
         CallStateManager.setAudioHandlers(
-            mute = { setMuted(it) },
-            speaker = { enabled ->
-                @Suppress("DEPRECATION")
-                setAudioRoute(if (enabled) android.telecom.CallAudioState.ROUTE_SPEAKER else android.telecom.CallAudioState.ROUTE_EARPIECE)
-            },
+            mute = { audioRouteManager.setMuted(it) },
+            speaker = { audioRouteManager.setSpeaker(it) },
             priority = true
         )
 
         // Single Hook for audio path and notification updates (if needed)
         CallStateManager.onCallStateChangedHook = { c, state ->
             if (state == Call.STATE_ACTIVE && !isSimulated) {
-                Log.d("Alibi_CallService", "Real call ACTIVE. Scheduling audio route to EARPIECE (200ms delay).")
-                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                    try {
-                        @Suppress("DEPRECATION")
-                        setAudioRoute(android.telecom.CallAudioState.ROUTE_EARPIECE)
-                        Log.d("Alibi_CallService", "Delayed audio route set to EARPIECE.")
-                    } catch (e: Exception) {
-                        Log.e("Alibi_CallService", "Failed to set audio route in delayed handler", e)
-                    }
-                }, 200)
+                audioRouteManager.scheduleEarpieceTransition()
             }
         }
     }
@@ -113,7 +92,7 @@ class CallService : InCallService() {
         super.onCallRemoved(call)
         val callHash = call.hashCode()
         if (!registeredCallIds.contains(callHash)) {
-            return // Skip redundant cleanup and logging
+            return 
         }
         registeredCallIds.remove(callHash)
         Log.d("Alibi_CallService", "onCallRemoved: hash=$callHash")
@@ -123,7 +102,7 @@ class CallService : InCallService() {
         val connectionId = extras.getString(com.example.alibi.telecom.TelecomConstants.EXTRA_CONNECTION_ID)
         val callId = alibiId ?: connectionId ?: call.hashCode().toString()
         
-        launchedUiForCalls.remove(callId)
+        uiManager.clearUiState(callId)
         Log.d("Alibi_CallService", "onCallRemoved: Removing call $callId immediately.")
         
         // Task 14: Immediate removal from manager map to prevent UI deadlock
@@ -158,27 +137,27 @@ class CallService : InCallService() {
             call.state
         }
         
-        // For simulated calls, we might be cloaked. Check phase from manager.
         val connectionId = call.details.extras?.getString(com.example.alibi.telecom.TelecomConstants.EXTRA_CONNECTION_ID)
         val id = connectionId ?: call.hashCode().toString()
-        val phase = CallStateManager.activeCalls.value[id]?.phase
+        val callInfo = CallStateManager.activeCalls.value[id]
+        val phase = callInfo?.phase
         val isDialingPhase = phase == com.example.alibi.telecom.SimulationPhase.DIALING || 
                            phase == com.example.alibi.telecom.SimulationPhase.RINGING
 
         val intent = Intent(this, CallNotificationService::class.java).apply {
-            putExtra(CallNotificationService.EXTRA_CALL_ID, id)
-            putExtra(CallNotificationService.EXTRA_PHONE_NUMBER, call.details.handle?.schemeSpecificPart)
+            putExtra(TelecomConstants.EXTRA_CALL_ID, id)
+            putExtra(TelecomConstants.EXTRA_PHONE_NUMBER, call.details.handle?.schemeSpecificPart)
             val name = call.details.callerDisplayName ?: call.details.handle?.schemeSpecificPart ?: "Unknown"
-            putExtra(CallNotificationService.EXTRA_NAME, name)
-            putExtra(CallNotificationService.EXTRA_IS_INCOMING, state == Call.STATE_RINGING || (isSimulated && phase == com.example.alibi.telecom.SimulationPhase.RINGING))
-            putExtra(CallNotificationService.EXTRA_IS_DIALING, state == Call.STATE_DIALING || state == Call.STATE_CONNECTING || (isSimulated && isDialingPhase))
-            putExtra(CallNotificationService.EXTRA_IS_SIMULATED, isSimulated)
+            putExtra(TelecomConstants.EXTRA_NAME, name)
+            putExtra(TelecomConstants.EXTRA_IS_INCOMING, state == Call.STATE_RINGING || (isSimulated && phase == com.example.alibi.telecom.SimulationPhase.RINGING))
+            putExtra(TelecomConstants.EXTRA_IS_DIALING, state == Call.STATE_DIALING || state == Call.STATE_CONNECTING || (isSimulated && isDialingPhase))
+            putExtra(TelecomConstants.EXTRA_IS_SIMULATED, isSimulated)
             
-            val startTime = CallStateManager.activeCalls.value[id]?.answerTime ?: 0L
-            if (startTime > 0L) {
-                putExtra(CallNotificationService.EXTRA_START_TIME, startTime)
+            val startTimeValue = callInfo?.answerTime ?: 0L
+            if (startTimeValue > 0L) {
+                putExtra(TelecomConstants.EXTRA_START_TIME, startTimeValue)
             } else if (state == Call.STATE_ACTIVE && !isDialingPhase) {
-                 putExtra(CallNotificationService.EXTRA_START_TIME, System.currentTimeMillis())
+                 putExtra(TelecomConstants.EXTRA_START_TIME, System.currentTimeMillis())
             }
         }
         ContextCompat.startForegroundService(this, intent)

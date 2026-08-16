@@ -40,12 +40,18 @@ import androidx.compose.ui.platform.LocalLocale
 fun ActiveCallScreen(
     phoneNumber: String
 ) {
-    val callState by CallStateManager.callState.collectAsState()
-    val simulationPhase by CallStateManager.simulationPhase.collectAsState()
-    val currentCall by CallStateManager.currentCall.collectAsState()
-    val isMuted by CallStateManager.isMuted.collectAsState()
-    val speakerOn by CallStateManager.isSpeakerOn.collectAsState()
-    val isHolding by CallStateManager.isHolding.collectAsState()
+    val state by CallStateManager.state.collectAsState()
+    
+    val currentCallId = state.currentCallId
+    val activeCalls = state.activeCalls
+    val callInfo = activeCalls[currentCallId] ?: activeCalls.values.lastOrNull()
+    
+    val callState = callInfo?.state ?: Call.STATE_DISCONNECTED
+    val simulationPhase = callInfo?.phase ?: SimulationPhase.IDLE
+    val currentCall = callInfo?.call
+    val isMuted = state.isMuted
+    val speakerOn = state.isSpeakerOn
+    val isHolding = state.isHolding
     
     // Task 15: Log state changes for debugging
     LaunchedEffect(callState, simulationPhase) {
@@ -53,13 +59,11 @@ fun ActiveCallScreen(
     }
     
     // Task 15: Observe currentCall metadata directly for reliability
-    val displayPhoneNumber = remember(currentCall, phoneNumber) {
-        currentCall?.details?.handle?.schemeSpecificPart 
-            ?: currentCall?.details?.extras?.getString(com.example.alibi.telecom.TelecomConstants.EXTRA_CONNECTION_ID)
-            ?: phoneNumber
+    val displayPhoneNumber = remember(callInfo, phoneNumber) {
+        callInfo?.number ?: phoneNumber
     }
     
-    val answerTime by CallStateManager.answerTime.collectAsState()
+    val answerTime = callInfo?.answerTime ?: 0L
     var durationSeconds by remember { mutableLongStateOf(0L) }
     
     val windowSizeClass = currentWindowAdaptiveInfo().windowSizeClass

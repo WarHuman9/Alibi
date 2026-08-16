@@ -5,10 +5,7 @@ import android.media.*
 import android.os.Build
 import android.util.Log
 import com.example.alibi.telecom.CallStateManager
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.*
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -17,10 +14,14 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 class AudioHeartbeatManager private constructor(context: Context) : AudioManager.OnAudioFocusChangeListener {
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    
+    @Volatile
     private var audioTrack: AudioTrack? = null
+    private var heartbeatJob: Job? = null
     private val isPlaying = AtomicBoolean(false)
     private var focusRequest: AudioFocusRequest? = null
     private val managerScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private val audioScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     
     // Reference to the active connection for status synchronization
     var connection: SimulatedConnection? = null
@@ -60,6 +61,19 @@ class AudioHeartbeatManager private constructor(context: Context) : AudioManager
         Log.d(TAG, "Aggressive stop: Releasing AudioTrack and abandoning focus.")
         stopSilentAudio()
         abandonAudioFocus()
+        resetHardware()
+    }
+
+    /**
+     * Centralized hardware reset to ensure simulation doesn't leak into real calls.
+     */
+    private fun resetHardware() {
+        try {
+            Log.d(TAG, "Resetting hardware audio mode to NORMAL")
+            audioManager.mode = AudioManager.MODE_NORMAL
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to reset hardware audio mode", e)
+        }
     }
 
     /**
@@ -68,11 +82,7 @@ class AudioHeartbeatManager private constructor(context: Context) : AudioManager
     fun forceReset() {
         Log.w(TAG, "Force reset requested. Cleaning up audio state.")
         stop()
-        try {
-            audioManager.mode = AudioManager.MODE_NORMAL
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to force reset mode", e)
-        }
+        resetHardware()
     }
 
     override fun onAudioFocusChange(focusChange: Int) {
@@ -140,64 +150,86 @@ class AudioHeartbeatManager private constructor(context: Context) : AudioManager
             Log.d(TAG, "abandonAudioFocus result: $result")
             focusRequest = null
             // Task 18: Reset mode immediately after abandoning focus to prevent simulation leak
-            audioManager.mode = AudioManager.MODE_NORMAL
+            resetHardware()
         } catch (e: Exception) {
             Log.e(TAG, "Failed to abandon audio focus", e)
         }
     }
 
     private fun startSilentAudio() {
-        val sampleRate = 8000
-        val bufferSize = AudioTrack.getMinBufferSize(
-            sampleRate,
-            AudioFormat.CHANNEL_OUT_MONO,
-            AudioFormat.ENCODING_PCM_16BIT
-        )
-
-        val track = AudioTrack.Builder()
-            .setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                    .build()
-            )
-            .setAudioFormat(
-                AudioFormat.Builder()
-                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                    .setSampleRate(sampleRate)
-                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                    .build()
-            )
-            .setBufferSizeInBytes(bufferSize)
-            .setTransferMode(AudioTrack.MODE_STREAM)
-            .build()
-
-        if (track.state != AudioTrack.STATE_INITIALIZED) {
-            track.release()
-            throw IllegalStateException("AudioTrack failed to initialize")
-        }
-
-        audioTrack = track
-        track.play()
-        
-        val silentBuffer = ShortArray(bufferSize)
-        Thread {
+        heartbeatJob = audioScope.launch {
+            var track: AudioTrack? = null
             try {
-                while (isPlaying.get()) {
+                val sampleRate = 8000
+                val bufferSize = AudioTrack.getMinBufferSize(
+                    sampleRate,
+                    AudioFormat.CHANNEL_OUT_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT
+                )
+
+                track = AudioTrack.Builder()
+                    .setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                            .build()
+                    )
+                    .setAudioFormat(
+                        AudioFormat.Builder()
+                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                            .setSampleRate(sampleRate)
+                            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                            .build()
+                    )
+                    .setBufferSizeInBytes(bufferSize)
+                    .setTransferMode(AudioTrack.MODE_STREAM)
+                    .build()
+
+                if (track.state != AudioTrack.STATE_INITIALIZED) {
+                    Log.e(TAG, "AudioTrack failed to initialize")
+                    track.release()
+                    return@launch
+                }
+
+                audioTrack = track
+                track.play()
+                Log.d(TAG, "Silent audio heartbeat coroutine started")
+
+                val silentBuffer = ShortArray(bufferSize)
+                while (isActive && isPlaying.get()) {
                     track.write(silentBuffer, 0, silentBuffer.size)
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "AudioHeartbeat thread error", e)
+                if (e !is CancellationException) {
+                    Log.e(TAG, "AudioHeartbeat coroutine error", e)
+                }
             } finally {
-                // Ensure track is released if thread ends for some reason while playing
-                if (isPlaying.get()) {
-                    stop()
+                Log.d(TAG, "Cleaning up AudioTrack in coroutine finally block")
+                track?.apply {
+                    try {
+                        if (state == AudioTrack.STATE_INITIALIZED) {
+                            stop()
+                        }
+                    } catch (e: Exception) { /* ignore */ }
+                    release()
+                }
+                if (audioTrack == track) {
+                    audioTrack = null
+                }
+                // If we stopped unexpectedly but isPlaying is still true, trigger a full stop
+                if (isPlaying.get() && isActive) {
+                    managerScope.launch { stop() }
                 }
             }
-        }.start()
+        }
     }
 
     private fun stopSilentAudio() {
+        Log.d(TAG, "Stopping silent audio: cancelling job")
+        heartbeatJob?.cancel()
+        heartbeatJob = null
+        
+        // Safety: ensure it's cleared if the coroutine hasn't handled it yet or won't
         try {
             audioTrack?.apply {
                 if (state == AudioTrack.STATE_INITIALIZED) {
