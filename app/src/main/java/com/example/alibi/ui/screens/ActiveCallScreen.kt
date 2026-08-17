@@ -126,14 +126,23 @@ fun ActiveCallScreen(
                             MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
                         )
                     )
-                ),
-            contentAlignment = Alignment.Center
+                )
         ) {
-            HoldBadge(visible = isHolding)
+            // Task 17: Permanent Hold Badge with Zero Layout Shift
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.TopCenter),
+                contentAlignment = Alignment.TopCenter
+            ) {
+                HoldBadge(visible = isHolding)
+            }
 
             val contentScale = if (isExpanded) 1.2f else 1f
             Column(
-                modifier = Modifier.scale(contentScale),
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .scale(contentScale),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
@@ -284,41 +293,48 @@ private fun CallControls(
 
 @Composable
 private fun HoldBadge(visible: Boolean) {
-    // Task 11: High-priority On Hold Badge (Persistent and Non-Clipped)
-    AnimatedVisibility(
-        visible = visible,
-        enter = fadeIn() + expandVertically(),
-        exit = fadeOut() + shrinkVertically(),
+    // Task 17: Permanent Hold Badge with state-based colors and Zero Layout Shift
+    val containerColor by animateColorAsState(
+        if (visible) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.1f),
+        label = "containerColor"
+    )
+    val contentColor by animateColorAsState(
+        if (visible) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.2f),
+        label = "contentColor"
+    )
+    val elevation by animateDpAsState(
+        if (visible) 8.dp else 0.dp,
+        label = "elevation"
+    )
+
+    Surface(
+        shape = RoundedCornerShape(24.dp),
+        color = containerColor,
+        tonalElevation = elevation,
+        shadowElevation = if (visible) 6.dp else 0.dp,
         modifier = Modifier
             .padding(top = 32.dp)
-            .zIndex(10f) // Highest priority
+            .zIndex(10f)
     ) {
-        Surface(
-            shape = RoundedCornerShape(24.dp),
-            color = MaterialTheme.colorScheme.errorContainer,
-            tonalElevation = 8.dp,
-            shadowElevation = 6.dp
+        Row(
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.MicOff,
-                    contentDescription = null,
-                    modifier = Modifier.size(20.dp),
-                    tint = MaterialTheme.colorScheme.onErrorContainer
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "CALL ON HOLD",
-                    style = MaterialTheme.typography.labelLarge.copy(
-                        fontWeight = FontWeight.ExtraBold,
-                        letterSpacing = 1.2.sp
-                    ),
-                    color = MaterialTheme.colorScheme.onErrorContainer
-                )
-            }
+            Icon(
+                imageVector = Icons.Rounded.MicOff,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
+                tint = contentColor
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = "CALL ON HOLD",
+                style = MaterialTheme.typography.labelLarge.copy(
+                    fontWeight = FontWeight.ExtraBold,
+                    letterSpacing = 1.2.sp
+                ),
+                color = contentColor
+            )
         }
     }
 }

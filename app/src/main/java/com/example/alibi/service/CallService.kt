@@ -8,6 +8,8 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 import com.example.alibi.telecom.CallStateManager
 import com.example.alibi.telecom.TelecomConstants
+import java.util.Collections
+import java.util.concurrent.ConcurrentHashMap
 
 import com.example.alibi.util.CallAudioRouteManager
 import com.example.alibi.util.CallUiManager
@@ -15,7 +17,7 @@ import com.example.alibi.util.CallUiManager
 class CallService : InCallService() {
     
     private val callCallbacks = mutableMapOf<Call, Call.Callback>()
-    private val registeredCallIds = mutableSetOf<Int>()
+    private val registeredCallIds = Collections.newSetFromMap(ConcurrentHashMap<Int, Boolean>())
     private lateinit var backgroundThread: android.os.HandlerThread
     private lateinit var backgroundHandler: android.os.Handler
     
@@ -91,10 +93,10 @@ class CallService : InCallService() {
     override fun onCallRemoved(call: Call) {
         super.onCallRemoved(call)
         val callHash = call.hashCode()
-        if (!registeredCallIds.contains(callHash)) {
+        if (!registeredCallIds.remove(callHash)) {
+            Log.d("Alibi_CallService", "onCallRemoved: Call $callHash already removed or not found. Skipping redundant cleanup.")
             return 
         }
-        registeredCallIds.remove(callHash)
         Log.d("Alibi_CallService", "onCallRemoved: hash=$callHash")
         
         val extras = call.details.extras ?: android.os.Bundle.EMPTY
@@ -114,8 +116,6 @@ class CallService : InCallService() {
         // Cleanup global listeners only if no more calls are active
         if (CallStateManager.totalActiveCalls.value == 0) {
             CallStateManager.clearAudioHandlers(priority = true)
-            CallStateManager.onAnswerRequested = null
-            CallStateManager.onDisconnectRequested = null
             CallStateManager.onCallStateChangedHook = null
         }
     }

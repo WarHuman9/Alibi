@@ -57,11 +57,15 @@ class AudioHeartbeatManager private constructor(context: Context) : AudioManager
 
 
     fun stop() {
-        isPlaying.set(false)
+        if (!isPlaying.compareAndSet(true, false)) {
+            return
+        }
         Log.d(TAG, "Aggressive stop: Releasing AudioTrack and abandoning focus.")
+        
+        // Task 19: Strict Order - Release track and reset mode BEFORE abandoning focus
         stopSilentAudio()
-        abandonAudioFocus()
         resetHardware()
+        abandonAudioFocus()
     }
 
     /**
