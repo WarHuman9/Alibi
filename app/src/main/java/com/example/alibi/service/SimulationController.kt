@@ -175,41 +175,71 @@ object SimulationController {
     }
 
     /**
-     * Records the end of a simulated call using the captured snapshot.
+     * Explicitly triggers logging for a call before it's removed from state.
+     * Task 21: Atomic Logging Synchronization.
+     */
+    fun triggerLogging(id: String, userInitiated: Boolean) {
+        Log.d(TAG, "triggerLogging: $id (userInitiated=$userInitiated)")
+        
+        val connection = activeConnections[id]
+        val intendedDuration = connection?.request?.duration
+        val context = connection?.context
+        
+        val snapshot = CallStateManager.completeCall(id)
+        
+        if (snapshot != null && context != null) {
+            controllerScope.launch {
+                recordCallEnd(context, snapshot, intendedDuration, userInitiated)
+            }
+        } else {
+            Log.w(TAG, "triggerLogging: Failed to get snapshot or context for $id")
+        }
+    }
+
+    /**
+     * Records the end of a simulated call using the provided snapshot.
      */
     suspend fun recordCallEnd(
         context: Context,
-        id: String,
-        fallbackSnapshot: CallLogSnapshot,
+        snapshot: CallLogSnapshot,
         intendedDuration: Long?,
         isUserTerminated: Boolean
     ) = withContext(Dispatchers.IO + NonCancellable) {
-        val snapshot = CallStateManager.getAndRemoveSnapshot(id) ?: fallbackSnapshot
-        Log.d(TAG, "recordCallEnd: Processing log for ${snapshot.number} (Using atomic snapshot: ${snapshot != fallbackSnapshot})")
+        Log.d(TAG, "recordCallEnd: Processing log for ${snapshot.number}")
 
         var finalType = snapshot.type
         var finalDuration = 0L
 
-        when {
-            snapshot.type == android.provider.CallLog.Calls.MISSED_TYPE -> {
-                finalDuration = 0L
+        if (snapshot.answerTime > 0L) {
+            // Task 21: Answered calls must be INCOMING or OUTGOING
+            if (finalType != android.provider.CallLog.Calls.OUTGOING_TYPE) {
+                finalType = android.provider.CallLog.Calls.INCOMING_TYPE
             }
-            (snapshot.type == android.provider.CallLog.Calls.INCOMING_TYPE) && (snapshot.answerTime == 0L) -> {
-                finalType = if (isUserTerminated) android.provider.CallLog.Calls.REJECTED_TYPE else android.provider.CallLog.Calls.MISSED_TYPE
-                finalDuration = 0L
+            
+            val actualElapsed = (snapshot.endTime - snapshot.answerTime) / 1000
+            finalDuration = if (isUserTerminated) {
+                actualElapsed
+            } else if (intendedDuration != null) {
+                kotlin.math.min(actualElapsed, intendedDuration)
+            } else {
+                actualElapsed
             }
-            snapshot.answerTime > 0L -> {
-                val actualElapsed = (snapshot.endTime - snapshot.answerTime) / 1000
-                finalDuration = if (isUserTerminated) {
-                    actualElapsed
-                } else if (intendedDuration != null) {
-                    kotlin.math.min(actualElapsed, intendedDuration)
-                } else {
-                    actualElapsed
+        } else {
+            // Not answered
+            when (snapshot.type) {
+                android.provider.CallLog.Calls.MISSED_TYPE -> {
+                    finalDuration = 0L
                 }
-            }
-            snapshot.type == android.provider.CallLog.Calls.OUTGOING_TYPE && snapshot.answerTime == 0L -> {
-                finalDuration = 0L
+                android.provider.CallLog.Calls.INCOMING_TYPE -> {
+                    finalType = if (isUserTerminated) android.provider.CallLog.Calls.REJECTED_TYPE else android.provider.CallLog.Calls.MISSED_TYPE
+                    finalDuration = 0L
+                }
+                android.provider.CallLog.Calls.OUTGOING_TYPE -> {
+                    finalDuration = 0L
+                }
+                else -> {
+                    finalDuration = 0L
+                }
             }
         }
 

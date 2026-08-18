@@ -146,81 +146,49 @@ class CallLogHelper private constructor(private val context: Context) {
 
     /**
      * Inserts a call record into the system call log.
-     * Task 18: Improved robustness and added missing fields for better system compatibility.
+     * Refined for Task 20: Minimalist mapping and no smart fallback.
      */
-    fun insertCallLog(
+    suspend fun insertCallLog(
         phoneNumber: String,
         duration: Long,
         timestamp: Long,
         callType: Int,
         simHandle: android.telecom.PhoneAccountHandle? = null,
         features: Int = 0
-    ) {
+    ) = withContext(Dispatchers.IO + NonCancellable) {
         Log.d(TAG, "insertCallLog: Request received for $phoneNumber (duration=$duration, type=$callType)")
-        helperScope.launch {
-            withContext(NonCancellable) {
-                try {
-                    Log.d(TAG, "insertCallLog: Started writing to ContentResolver for $phoneNumber")
-                    val values = ContentValues().apply {
-                        put(CallLog.Calls.NUMBER, phoneNumber)
-                        put(CallLog.Calls.DATE, timestamp)
-                        put(CallLog.Calls.DURATION, duration)
-                        put(CallLog.Calls.TYPE, callType)
-                        put(CallLog.Calls.NEW, 1)
-                        put(CallLog.Calls.IS_READ, 0)
-                        put(CallLog.Calls.FEATURES, features)
-                        put(CallLog.Calls.NUMBER_PRESENTATION, CallLog.Calls.PRESENTATION_ALLOWED)
-                        
-                        if (android.os.Build.VERSION.SDK_INT >= 34) {
-                            put(CallLog.Calls.LAST_MODIFIED, System.currentTimeMillis())
-                        } else {
-                            put("last_modified", System.currentTimeMillis())
-                        }
-                        
-                        var accountHandle = simHandle
-                        if (accountHandle == null) {
-                            try {
-                                if (ContextCompat.checkSelfPermission(context, android.Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED) {
-                                    val telecomManager = context.getSystemService(Context.TELECOM_SERVICE) as? android.telecom.TelecomManager
-                                    accountHandle = telecomManager?.getCallCapablePhoneAccounts()?.firstOrNull()
-                                }
-                            } catch (e: Exception) {
-                                Log.w(TAG, "Could find fallback phone account", e)
-                            }
-                        }
+        try {
+            val values = ContentValues().apply {
+                put(CallLog.Calls.NUMBER, phoneNumber)
+                put(CallLog.Calls.DATE, timestamp)
+                put(CallLog.Calls.DURATION, duration)
+                put(CallLog.Calls.TYPE, callType)
+                put(CallLog.Calls.NEW, 1)
+                put(CallLog.Calls.IS_READ, 0)
+                put(CallLog.Calls.NUMBER_PRESENTATION, CallLog.Calls.PRESENTATION_ALLOWED)
+                
+                // Optional Features
+                if (features != 0) {
+                    put(CallLog.Calls.FEATURES, features)
+                }
 
-                        if (accountHandle != null) {
-                            // Some systems require these to be valid registered accounts to show up
-                            put(CallLog.Calls.PHONE_ACCOUNT_COMPONENT_NAME, accountHandle.componentName.flattenToString())
-                            put(CallLog.Calls.PHONE_ACCOUNT_ID, accountHandle.id)
-                        }
-
-                        // Task 18: Add Country ISO if possible to help system dialer formatting
-                        try {
-                            val tm = context.getSystemService(Context.TELEPHONY_SERVICE) as? android.telephony.TelephonyManager
-                            val countryIso = tm?.networkCountryIso ?: tm?.simCountryIso
-                            if (!countryIso.isNullOrEmpty()) {
-                                put(CallLog.Calls.COUNTRY_ISO, countryIso.uppercase())
-                            }
-                        } catch (e: Exception) {
-                            Log.w(TAG, "Could not determine country ISO", e)
-                        }
-                    }
-
-                    // Try both standard and shadow URI if needed (shadow is for some OEM implementations)
-                    val uri = context.contentResolver.insert(CallLog.Calls.CONTENT_URI, values)
-                    
-                    if (uri != null) {
-                        Log.d(TAG, "insertCallLog: Success! Call log inserted: $uri")
-                        // Notify any observers (like our own flow)
-                        context.contentResolver.notifyChange(CallLog.Calls.CONTENT_URI, null)
-                    } else {
-                        Log.e(TAG, "insertCallLog: Fail. ContentResolver returned null URI for $phoneNumber")
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "insertCallLog: Fail. Exception while inserting call log for $phoneNumber", e)
+                // Explicit SIM Handle - NO SMART FALLBACK
+                if (simHandle != null) {
+                    put(CallLog.Calls.PHONE_ACCOUNT_COMPONENT_NAME, simHandle.componentName.flattenToString())
+                    put(CallLog.Calls.PHONE_ACCOUNT_ID, simHandle.id)
                 }
             }
+
+            val uri = context.contentResolver.insert(CallLog.Calls.CONTENT_URI, values)
+            
+            if (uri != null) {
+                Log.d(TAG, "insertCallLog: Success! Call log inserted: $uri")
+                context.contentResolver.notifyChange(CallLog.Calls.CONTENT_URI, null)
+            } else {
+                Log.e(TAG, "insertCallLog: Fail. ContentResolver returned null URI")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "insertCallLog: Exception", e)
         }
     }
 

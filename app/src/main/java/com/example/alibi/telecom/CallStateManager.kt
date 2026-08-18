@@ -10,6 +10,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.*
 import android.os.Build
+import androidx.core.content.edit
 
 /**
  * Pure data registry for call state across the application.
@@ -140,12 +141,41 @@ object CallStateManager {
     val isMuted: StateFlow<Boolean> = _state.map { it.isMuted }.stateIn(scope, SharingStarted.Eagerly, false)
     val isSpeakerOn: StateFlow<Boolean> = _state.map { it.isSpeakerOn }.stateIn(scope, SharingStarted.Eagerly, false)
 
-    private val snapshots = java.util.concurrent.ConcurrentHashMap<String, CallLogSnapshot>()
-
     private var nextCallStartTime: Long? = null
     private var nextCallDuration: Long? = null
     private var nextCallSimHandle: PhoneAccountHandle? = null
     private var nextCallFeatures: Int = 0
+
+    // Task 20: Persisted SIM Selection
+    private const val PREFS_NAME = "alibi_call_manager_prefs"
+    private const val KEY_SIM_ID = "mimic_sim_id"
+    private const val KEY_SIM_COMP = "mimic_sim_component"
+
+    fun getPersistedSimHandle(context: Context): PhoneAccountHandle? {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val id = prefs.getString(KEY_SIM_ID, null) ?: return null
+        val comp = prefs.getString(KEY_SIM_COMP, null) ?: return null
+        return try {
+            val component = android.content.ComponentName.unflattenFromString(comp) ?: return null
+            PhoneAccountHandle(component, id)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    fun setMimicSimHandle(context: Context, handle: PhoneAccountHandle?) {
+        nextCallSimHandle = handle
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit {
+            if (handle != null) {
+                putString(KEY_SIM_ID, handle.id)
+                putString(KEY_SIM_COMP, handle.componentName.flattenToString())
+            } else {
+                remove(KEY_SIM_ID)
+                remove(KEY_SIM_COMP)
+            }
+        }
+    }
 
     val isCloaking: Boolean
         get() {
@@ -215,17 +245,7 @@ object CallStateManager {
                 )
 
                 if (state == Call.STATE_DISCONNECTED) {
-                    Log.d(TAG, "updateCallState: Capturing atomic snapshot for $id")
-                    snapshots[id] = CallLogSnapshot(
-                        number = updatedInfo.number,
-                        type = updatedInfo.type,
-                        startTime = updatedInfo.startTime,
-                        answerTime = updatedInfo.answerTime,
-                        endTime = System.currentTimeMillis(),
-                        simHandle = updatedInfo.simHandle,
-                        features = updatedInfo.features,
-                        isSimulated = updatedInfo.isSimulated
-                    )
+                    Log.d(TAG, "updateCallState: Call $id disconnected")
                 }
                 
                 val newActiveCalls = s.activeCalls + (id to updatedInfo)
@@ -317,10 +337,23 @@ object CallStateManager {
     }
 
     /**
-     * Retrieves and removes the captured snapshot for a disconnected call.
+     * Atomically captures call metadata for logging and removes it from the active registry.
+     * Task 21: Atomic Logging Synchronization.
      */
-    fun getAndRemoveSnapshot(id: String): CallLogSnapshot? {
-        return snapshots.remove(id)
+    fun completeCall(id: String): CallLogSnapshot? {
+        val info = _state.value.activeCalls[id] ?: return null
+        val snapshot = CallLogSnapshot(
+            number = info.number,
+            type = info.type,
+            startTime = info.startTime,
+            answerTime = info.answerTime,
+            endTime = System.currentTimeMillis(),
+            simHandle = info.simHandle,
+            features = info.features,
+            isSimulated = info.isSimulated
+        )
+        removeCall(id)
+        return snapshot
     }
 
     fun clearAllCalls() {
@@ -329,7 +362,6 @@ object CallStateManager {
 
     fun setCustomStartTime(timestamp: Long?) { nextCallStartTime = timestamp }
     fun setIntendedDuration(duration: Long?) { nextCallDuration = duration }
-    fun setMimicSimHandle(handle: PhoneAccountHandle?) { nextCallSimHandle = handle }
     fun setCallFeatures(features: Int) { nextCallFeatures = features }
 
     fun onCallAdded(call: Call, isSimulated: Boolean? = null, handler: android.os.Handler? = null) {
@@ -373,7 +405,7 @@ object CallStateManager {
             phase = initialPhase,
             startTime = nextCallStartTime ?: System.currentTimeMillis(),
             answerTime = if (state == Call.STATE_ACTIVE) System.currentTimeMillis() else 0L,
-            simHandle = nextCallSimHandle ?: call.details.accountHandle,
+            simHandle = if (isRealCall) call.details.accountHandle else (nextCallSimHandle ?: call.details.accountHandle),
             features = nextCallFeatures,
             isHolding = (state == Call.STATE_HOLDING)
         )
@@ -409,47 +441,115 @@ object CallStateManager {
         removeCall(id)
     }
 
-    fun setSimulatedCallActive(active: Boolean, phoneNumber: String? = null, state: Int = Call.STATE_ACTIVE, type: Int? = null, id: String? = null) {
-        val targetId = id ?: return
-        if (active) {
-            _state.update { s ->
-                val existing = s.activeCalls[targetId]
-                if (existing != null) {
-                    var newAnswerTime = existing.answerTime
-                    val newPhase = when (state) {
+    fun setSimulatedCallActive(request: SimulatedCallRequest) {
+        val targetId = request.alibiId
+        _state.update { s ->
+            val existing = s.activeCalls[targetId]
+            // Calculate state based on direction
+            val state = if (request.direction == CallLog.Calls.OUTGOING_TYPE) 
+                Call.STATE_DIALING else Call.STATE_RINGING
+            
+            if (existing != null) {
+                var newAnswerTime = existing.answerTime
+                val newPhase = when (state) {
+                    Call.STATE_RINGING -> SimulationPhase.RINGING
+                    Call.STATE_DIALING -> SimulationPhase.DIALING
+                    Call.STATE_ACTIVE -> {
+                        if (newAnswerTime == 0L) newAnswerTime = System.currentTimeMillis()
+                        SimulationPhase.SIMULATED_ACTIVE
+                    }
+                    Call.STATE_HOLDING -> SimulationPhase.HOLDING
+                    else -> existing.phase
+                }
+                val updated = existing.copy(
+                    isSimulated = true,
+                    number = request.phoneNumber,
+                    name = request.phoneNumber,
+                    state = state,
+                    phase = newPhase,
+                    answerTime = newAnswerTime,
+                    isHolding = (state == Call.STATE_HOLDING),
+                    type = request.direction,
+                    simHandle = request.simHandle ?: existing.simHandle,
+                    features = request.features,
+                    startTime = request.startTime ?: existing.startTime
+                )
+                s.copy(activeCalls = s.activeCalls + (targetId to updated))
+            } else {
+                val optimistic = CallMetadata(
+                    id = targetId,
+                    isSimulated = true,
+                    number = request.phoneNumber,
+                    name = request.phoneNumber,
+                    state = state,
+                    phase = when (state) {
                         Call.STATE_RINGING -> SimulationPhase.RINGING
                         Call.STATE_DIALING -> SimulationPhase.DIALING
-                        Call.STATE_ACTIVE -> {
-                            if (newAnswerTime == 0L) newAnswerTime = System.currentTimeMillis()
-                            SimulationPhase.SIMULATED_ACTIVE
-                        }
-                        Call.STATE_HOLDING -> SimulationPhase.HOLDING
-                        else -> existing.phase
+                        else -> SimulationPhase.IDLE
+                    },
+                    type = request.direction,
+                    simHandle = request.simHandle,
+                    features = request.features,
+                    startTime = request.startTime ?: System.currentTimeMillis()
+                )
+                s.copy(
+                    pendingMetadata = s.pendingMetadata + (targetId to request),
+                    activeCalls = s.activeCalls + (targetId to optimistic)
+                )
+            }
+        }
+    }
+
+    fun setSimulatedCallActive(active: Boolean, phoneNumber: String? = null, state: Int = Call.STATE_ACTIVE, type: Int? = null, id: String? = null) {
+        if (!active && id != null) {
+            removeCall(id)
+            return
+        }
+        
+        val targetId = id ?: return
+        _state.update { s ->
+            val existing = s.activeCalls[targetId]
+            if (existing != null) {
+                var newAnswerTime = existing.answerTime
+                val newPhase = when (state) {
+                    Call.STATE_RINGING -> SimulationPhase.RINGING
+                    Call.STATE_DIALING -> SimulationPhase.DIALING
+                    Call.STATE_ACTIVE -> {
+                        if (newAnswerTime == 0L) newAnswerTime = System.currentTimeMillis()
+                        SimulationPhase.SIMULATED_ACTIVE
                     }
-                    val updated = existing.copy(
-                        isSimulated = true,
-                        number = phoneNumber ?: existing.number,
-                        name = phoneNumber ?: existing.name,
-                        state = state,
-                        phase = newPhase,
-                        answerTime = newAnswerTime,
-                        isHolding = (state == Call.STATE_HOLDING),
-                        type = type ?: existing.type
-                    )
-                    s.copy(activeCalls = s.activeCalls + (targetId to updated))
-                } else {
-                    val request = SimulatedCallRequest(phoneNumber = phoneNumber ?: "Unknown", direction = type ?: CallLog.Calls.INCOMING_TYPE, alibiId = targetId)
-                    val optimistic = CallMetadata(id = targetId, isSimulated = true, number = phoneNumber ?: "Unknown", name = phoneNumber ?: "Unknown", state = state, phase = when (state) {
+                    Call.STATE_HOLDING -> SimulationPhase.HOLDING
+                    else -> existing.phase
+                }
+                val updated = existing.copy(
+                    isSimulated = true,
+                    number = phoneNumber ?: existing.number,
+                    name = phoneNumber ?: existing.name,
+                    state = state,
+                    phase = newPhase,
+                    answerTime = newAnswerTime,
+                    isHolding = (state == Call.STATE_HOLDING),
+                    type = type ?: existing.type
+                )
+                s.copy(activeCalls = s.activeCalls + (targetId to updated))
+            } else {
+                val request = SimulatedCallRequest(phoneNumber = phoneNumber ?: "Unknown", direction = type ?: CallLog.Calls.INCOMING_TYPE, alibiId = targetId)
+                val optimistic = CallMetadata(
+                    id = targetId,
+                    isSimulated = true,
+                    number = phoneNumber ?: "Unknown",
+                    name = phoneNumber ?: "Unknown",
+                    state = state,
+                    phase = when (state) {
                         Call.STATE_RINGING -> SimulationPhase.RINGING
                         Call.STATE_DIALING -> SimulationPhase.DIALING
                         Call.STATE_ACTIVE -> SimulationPhase.SIMULATED_ACTIVE
                         else -> SimulationPhase.IDLE
-                    })
-                    s.copy(pendingMetadata = s.pendingMetadata + (targetId to request), activeCalls = s.activeCalls + (targetId to optimistic))
-                }
+                    },
+                    type = type ?: CallLog.Calls.INCOMING_TYPE
+                )
+                s.copy(pendingMetadata = s.pendingMetadata + (targetId to request), activeCalls = s.activeCalls + (targetId to optimistic))
             }
-        } else {
-            removeCall(targetId)
         }
     }
 

@@ -211,14 +211,8 @@ class TelecomHelper(private val context: Context) {
                 autoAnswerDelay = autoAnswerDelay
             )
             
-            // Task 15: Direct Injection - Pre-inject metadata to trigger immediate UI transition
-            CallStateManager.setSimulatedCallActive(
-                active = true,
-                phoneNumber = request.phoneNumber,
-                state = android.telecom.Call.STATE_RINGING,
-                type = request.direction,
-                id = request.alibiId
-            )
+            // Task 22: Atomic Metadata Injection
+            CallStateManager.setSimulatedCallActive(request)
             
             val extras = request.toBundle().apply {
                 putParcelable(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, phoneAccountHandle)
@@ -253,14 +247,8 @@ class TelecomHelper(private val context: Context) {
             autoAnswerDelay = autoAnswerDelay
         )
         
-        // Task 15: Direct Injection - Pre-inject metadata to trigger immediate UI transition
-        CallStateManager.setSimulatedCallActive(
-            active = true,
-            phoneNumber = request.phoneNumber,
-            state = android.telecom.Call.STATE_DIALING,
-            type = request.direction,
-            id = request.alibiId
-        )
+        // Task 22: Atomic Metadata Injection
+        CallStateManager.setSimulatedCallActive(request)
 
         val extras = request.toBundle().apply {
             putParcelable(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, phoneAccountHandle)

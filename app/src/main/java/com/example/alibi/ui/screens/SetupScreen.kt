@@ -115,7 +115,12 @@ fun SetupScreen(onNavigateToCall: (String) -> Unit) {
         simAccounts.clear()
         simAccounts.addAll(accounts)
         if (selectedSim == null) {
-            selectedSim = simAccounts.find { it.handle.id == telecomHelper.getPreferredSimId() } ?: simAccounts.firstOrNull()
+            val persisted = CallStateManager.getPersistedSimHandle(context)
+            selectedSim = if (persisted != null) {
+                simAccounts.find { it.handle == persisted }
+            } else {
+                simAccounts.find { it.handle.id == telecomHelper.getPreferredSimId() }
+            } ?: simAccounts.firstOrNull()
         }
 
         // Automatic Network Detection (Smart Defaults)
@@ -226,6 +231,7 @@ fun SetupScreen(onNavigateToCall: (String) -> Unit) {
                         onSimSelected = { 
                             selectedSim = it
                             telecomHelper.setPreferredSimId(it.handle.id)
+                            CallStateManager.setMimicSimHandle(context, it.handle)
                         },
                         phoneNumber = phoneNumber,
                         onPhoneNumberChange = { phoneNumber = it },
@@ -273,7 +279,16 @@ fun SetupScreen(onNavigateToCall: (String) -> Unit) {
                         onRequestRole = { (context as? Activity)?.let { requestDialerRole(it, roleLauncher) } },
                         onRegisterOnly = {
                             scope.launch {
-                                callLogHelper.insertCallLog(phoneNumber, durationSeconds.toLongOrNull() ?: 0L, getSelectedTimestamp(), callDirection, selectedSim?.handle, getFeatureFlags())
+                                val customTime = getSelectedTimestamp()
+                                val features = getFeatureFlags()
+                                callLogHelper.insertCallLog(
+                                    phoneNumber, 
+                                    durationSeconds.toLongOrNull() ?: 0L, 
+                                    customTime, 
+                                    callDirection, 
+                                    selectedSim?.handle, 
+                                    features
+                                )
                                 Toast.makeText(context, "Call registered in log", Toast.LENGTH_SHORT).show()
                             }
                         }
@@ -302,6 +317,7 @@ fun SetupScreen(onNavigateToCall: (String) -> Unit) {
                         onSimSelected = { 
                             selectedSim = it
                             telecomHelper.setPreferredSimId(it.handle.id)
+                            CallStateManager.setMimicSimHandle(context, it.handle)
                         },
                         phoneNumber = phoneNumber,
                         onPhoneNumberChange = { phoneNumber = it },
@@ -344,7 +360,16 @@ fun SetupScreen(onNavigateToCall: (String) -> Unit) {
                         onRequestRole = { (context as? Activity)?.let { requestDialerRole(it, roleLauncher) } },
                         onRegisterOnly = {
                             scope.launch {
-                                callLogHelper.insertCallLog(phoneNumber, durationSeconds.toLongOrNull() ?: 0L, getSelectedTimestamp(), callDirection, selectedSim?.handle, getFeatureFlags())
+                                val customTime = getSelectedTimestamp()
+                                val features = getFeatureFlags()
+                                callLogHelper.insertCallLog(
+                                    phoneNumber, 
+                                    durationSeconds.toLongOrNull() ?: 0L, 
+                                    customTime, 
+                                    callDirection, 
+                                    selectedSim?.handle, 
+                                    features
+                                )
                                 Toast.makeText(context, "Call registered in log", Toast.LENGTH_SHORT).show()
                             }
                         }

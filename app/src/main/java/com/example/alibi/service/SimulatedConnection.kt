@@ -32,13 +32,13 @@ class SimulatedConnection(
     private val isDestroyed = AtomicBoolean(false)
 
     // Captured metadata for atomic logging
-    private var localPhoneNumber: String? = null
-    private var localStartTime: Long = 0L
-    private var localAnswerTime: Long = 0L
-    private var localCallType: Int = android.provider.CallLog.Calls.INCOMING_TYPE
-    private var localIntendedDuration: Long? = null
-    private var localMimicSimHandle: PhoneAccountHandle? = null
-    private var localCallFeatures: Int = 0
+    internal var localPhoneNumber: String? = null
+    internal var localStartTime: Long = 0L
+    internal var localAnswerTime: Long = 0L
+    internal var localCallType: Int = android.provider.CallLog.Calls.INCOMING_TYPE
+    internal var localIntendedDuration: Long? = null
+    internal var localMimicSimHandle: PhoneAccountHandle? = null
+    internal var localCallFeatures: Int = 0
 
     init {
         Log.d(TAG, "Initializing SimulatedConnection: $connectionId")
@@ -63,19 +63,11 @@ class SimulatedConnection(
         CallStateManager.registerConnection(connectionId, this)
         CallStateManager.setCustomStartTime(request.startTime)
         CallStateManager.setIntendedDuration(request.duration)
-        CallStateManager.setMimicSimHandle(request.simHandle)
+        CallStateManager.setMimicSimHandle(context, request.simHandle)
         CallStateManager.setCallFeatures(request.features)
         
-        val initialState = if (request.direction == android.provider.CallLog.Calls.OUTGOING_TYPE) 
-            Call.STATE_DIALING else Call.STATE_RINGING
-            
-        CallStateManager.setSimulatedCallActive(
-            active = true,
-            phoneNumber = request.phoneNumber,
-            state = initialState,
-            type = request.direction,
-            id = connectionId
-        )
+        // Task 22: Atomic Metadata Injection
+        CallStateManager.setSimulatedCallActive(request.copy(alibiId = connectionId))
 
         if (request.direction == android.provider.CallLog.Calls.OUTGOING_TYPE) {
             setDialing()
@@ -143,6 +135,10 @@ class SimulatedConnection(
     fun terminate(userInitiated: Boolean, cause: Int = DisconnectCause.LOCAL) {
         if (isDestroyed.get()) return
         Log.d(TAG, "terminate: $connectionId, userInitiated=$userInitiated, cause=$cause")
+        
+        // Task 20: Trigger logging BEFORE any state removal or cleanup
+        SimulationController.triggerLogging(connectionId, userInitiated)
+        
         setDisconnected(DisconnectCause(cause))
         CallStateManager.updateCallState(connectionId, Call.STATE_DISCONNECTED)
         cleanup(userInitiated)
@@ -153,17 +149,6 @@ class SimulatedConnection(
         
         Log.d(TAG, "Cleanup initiated for connection: $connectionId")
 
-        val snapshot = CallLogSnapshot(
-            number = localPhoneNumber ?: address?.schemeSpecificPart ?: "Unknown",
-            type = localCallType,
-            startTime = if (localStartTime > 0) localStartTime else System.currentTimeMillis(),
-            answerTime = localAnswerTime,
-            endTime = System.currentTimeMillis(),
-            simHandle = localMimicSimHandle,
-            features = localCallFeatures,
-            isSimulated = true
-        )
-
         SimulationController.unregisterConnection(connectionId)
         
         AudioHeartbeatManager.getInstance(context).connection = null
@@ -173,17 +158,7 @@ class SimulatedConnection(
         CallStateManager.clearAudioHandlers(priority = false) 
 
         CoroutineScope(Dispatchers.IO).launch {
-            try {
-                SimulationController.recordCallEnd(
-                    context = context,
-                    id = connectionId,
-                    fallbackSnapshot = snapshot,
-                    intendedDuration = localIntendedDuration,
-                    isUserTerminated = isUserTerminated
-                )
-            } finally {
-                destroy()
-            }
+            destroy()
         }
         connectionScope.cancel()
     }
