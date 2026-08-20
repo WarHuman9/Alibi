@@ -32,13 +32,7 @@ class SimulatedConnection(
     private val isDestroyed = AtomicBoolean(false)
 
     // Captured metadata for atomic logging
-    internal var localPhoneNumber: String? = null
-    internal var localStartTime: Long = 0L
     internal var localAnswerTime: Long = 0L
-    internal var localCallType: Int = android.provider.CallLog.Calls.INCOMING_TYPE
-    internal var localIntendedDuration: Long? = null
-    internal var localMimicSimHandle: PhoneAccountHandle? = null
-    internal var localCallFeatures: Int = 0
 
     init {
         Log.d(TAG, "Initializing SimulatedConnection: $connectionId")
@@ -53,18 +47,7 @@ class SimulatedConnection(
         ex.putString(TelecomConstants.EXTRA_ALIBI_CALL_ID, connectionId)
         setExtras(ex)
 
-        localPhoneNumber = request.phoneNumber
-        localStartTime = request.startTime ?: System.currentTimeMillis()
-        localCallType = request.direction
-        localIntendedDuration = request.duration
-        localMimicSimHandle = request.simHandle
-        localCallFeatures = request.features
-
         CallStateManager.registerConnection(connectionId, this)
-        CallStateManager.setCustomStartTime(request.startTime)
-        CallStateManager.setIntendedDuration(request.duration)
-        CallStateManager.setMimicSimHandle(context, request.simHandle)
-        CallStateManager.setCallFeatures(request.features)
         
         // Task 22: Atomic Metadata Injection
         CallStateManager.setSimulatedCallActive(request.copy(alibiId = connectionId))
@@ -186,7 +169,7 @@ class SimulatedConnection(
 
         val intent = Intent(context, CallNotificationService::class.java).apply {
             putExtra(TelecomConstants.EXTRA_CALL_ID, connectionId)
-            putExtra(TelecomConstants.EXTRA_PHONE_NUMBER, localPhoneNumber ?: address?.schemeSpecificPart)
+            putExtra(TelecomConstants.EXTRA_PHONE_NUMBER, request.phoneNumber)
             putExtra(TelecomConstants.EXTRA_IS_INCOMING, state == STATE_RINGING || phase == com.example.alibi.telecom.SimulationPhase.RINGING)
             putExtra(TelecomConstants.EXTRA_IS_DIALING, state == STATE_DIALING || state == STATE_INITIALIZING || isDialingPhase)
             putExtra(TelecomConstants.EXTRA_IS_SIMULATED, true)

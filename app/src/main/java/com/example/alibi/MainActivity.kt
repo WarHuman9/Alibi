@@ -129,31 +129,30 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // Start the permission chain
-        @SuppressLint("InlinedApi")
+        // Consolidate permission chain logic while preserving the reverse sequence.
         LaunchedEffect(Unit) {
-            val hasNotifications = if (Build.VERSION.SDK_INT >= 33) {
-                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
-            } else true
-
-            val hasCallLog = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALL_LOG) == PackageManager.PERMISSION_GRANTED
-            val hasPhoneState = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED
-            val hasPhoneNumbers = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_NUMBERS) == PackageManager.PERMISSION_GRANTED
-            } else true
-            val isRoleHeld = RoleHelper.isDialerRoleHeld(context)
+            val needsNotifications = Build.VERSION.SDK_INT >= 33 &&
+                    ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+            
+            val needsCallLog = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALL_LOG) != PackageManager.PERMISSION_GRANTED
+            
+            val needsPhoneState = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED
+            val needsPhoneNumbers = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                    ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_NUMBERS) != PackageManager.PERMISSION_GRANTED
+            
+            val needsDialerRole = !RoleHelper.isDialerRoleHeld(context)
 
             when {
-                !hasNotifications -> notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                !hasCallLog -> callLogPermissionLauncher.launch(Manifest.permission.READ_CALL_LOG)
-                !hasPhoneState || !hasPhoneNumbers -> {
+                needsNotifications -> notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                needsCallLog -> callLogPermissionLauncher.launch(Manifest.permission.READ_CALL_LOG)
+                needsPhoneState || needsPhoneNumbers -> {
                     val permissions = mutableListOf(Manifest.permission.READ_PHONE_STATE)
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                         permissions.add(Manifest.permission.READ_PHONE_NUMBERS)
                     }
                     phonePermissionsLauncher.launch(permissions.toTypedArray())
                 }
-                !isRoleHeld -> requestDialerRole(context, roleLauncher)
+                needsDialerRole -> requestDialerRole(context, roleLauncher)
                 else -> viewModel.cleanupLegacy()
             }
         }
@@ -204,9 +203,9 @@ fun AlibiApp(initialNumber: String? = null) {
         }
 
         if (callToShow != null) {
-            val phoneNumber = callToShow.number
+            val callId = callToShow.id
             if (backStack.lastOrNull() !is ActiveCallRoute) {
-                backStack.add(ActiveCallRoute(phoneNumber))
+                backStack.add(ActiveCallRoute(callId))
             }
         } else {
             // If the map becomes empty OR all calls are DISCONNECTED, return to Setup
@@ -227,15 +226,14 @@ fun AlibiApp(initialNumber: String? = null) {
                 is MainTabsRoute -> NavEntry(key) {
                     MainTabScreen(
                         initialNumber = initialNumber,
-                        onNavigateToCall = { phoneNumber ->
-                            if (backStack.isEmpty() || backStack.last() !is ActiveCallRoute) {
-                                backStack.add(ActiveCallRoute(phoneNumber))
-                            }
+                        onNavigateToCall = { _ ->
+                            // Manual navigation from Setup/Dialer is now largely reactive
+                            // but we keep the callback for consistency if needed.
                         }
                     )
                 } as NavEntry<NavKey>
                 is ActiveCallRoute -> NavEntry(key) {
-                    ActiveCallScreen(phoneNumber = key.phoneNumber)
+                    ActiveCallScreen(callId = key.callId)
                 } as NavEntry<NavKey>
                 else -> error("Unknown key: $key")
             }

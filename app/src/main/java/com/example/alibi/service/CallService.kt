@@ -13,10 +13,11 @@ import java.util.concurrent.ConcurrentHashMap
 
 import com.example.alibi.util.CallAudioRouteManager
 import com.example.alibi.util.CallUiManager
+import com.example.alibi.util.getAlibiId
 
 class CallService : InCallService() {
     
-    private val callCallbacks = mutableMapOf<Call, Call.Callback>()
+    private val callCallbacks = ConcurrentHashMap<Call, Call.Callback>()
     private val registeredCallIds = Collections.newSetFromMap(ConcurrentHashMap<Int, Boolean>())
     private lateinit var backgroundThread: android.os.HandlerThread
     private lateinit var backgroundHandler: android.os.Handler
@@ -60,10 +61,9 @@ class CallService : InCallService() {
         val accountHandle = details.accountHandle
         val isSimulatedByHandle = accountHandle?.componentName?.className?.contains("SimulatedConnectionService") == true
         
-        val alibiId = extras.getString(com.example.alibi.telecom.TelecomConstants.EXTRA_ALIBI_CALL_ID)
-        val isSimulated = alibiId != null || isSimulatedByHandle
+        val isSimulated = extras.containsKey(TelecomConstants.EXTRA_ALIBI_CALL_ID) || isSimulatedByHandle
         
-        val id = alibiId ?: call.hashCode().toString()
+        val id = call.getAlibiId()
         Log.d("Alibi_CallService", "Resolved Call ID: $id (isSimulated=$isSimulated, byHandle=$isSimulatedByHandle)")
 
         // Register with manager BEFORE triggering notification intent
@@ -99,10 +99,7 @@ class CallService : InCallService() {
         }
         Log.d("Alibi_CallService", "onCallRemoved: hash=$callHash")
         
-        val extras = call.details.extras ?: android.os.Bundle.EMPTY
-        val alibiId = extras.getString(com.example.alibi.telecom.TelecomConstants.EXTRA_ALIBI_CALL_ID)
-        val connectionId = extras.getString(com.example.alibi.telecom.TelecomConstants.EXTRA_CONNECTION_ID)
-        val callId = alibiId ?: connectionId ?: call.hashCode().toString()
+        val callId = call.getAlibiId()
         
         uiManager.clearUiState(callId)
         Log.d("Alibi_CallService", "onCallRemoved: Removing call $callId immediately.")
@@ -137,8 +134,7 @@ class CallService : InCallService() {
             call.state
         }
         
-        val connectionId = call.details.extras?.getString(com.example.alibi.telecom.TelecomConstants.EXTRA_CONNECTION_ID)
-        val id = connectionId ?: call.hashCode().toString()
+        val id = call.getAlibiId()
         val callInfo = CallStateManager.activeCalls.value[id]
         val phase = callInfo?.phase
         val isDialingPhase = phase == com.example.alibi.telecom.SimulationPhase.DIALING || 

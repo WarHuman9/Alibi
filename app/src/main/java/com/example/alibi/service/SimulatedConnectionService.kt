@@ -3,7 +3,9 @@ package com.example.alibi.service
 import android.os.Bundle
 import android.telecom.*
 import android.util.Log
+import com.example.alibi.telecom.CallStateManager
 import com.example.alibi.telecom.SimulatedCallRequest
+import com.example.alibi.telecom.TelecomConstants
 
 /**
  * Service to handle simulated [Connection] creation.
@@ -16,8 +18,10 @@ class SimulatedConnectionService : ConnectionService() {
         request: ConnectionRequest?
     ): Connection {
         Log.d(TAG, "onCreateIncomingConnection: ${request?.address}")
-        val callRequest = SimulatedCallRequest.fromBundle(request?.extras ?: Bundle.EMPTY)
-        Log.d(TAG, "Metadata extracted: $callRequest")
+        val extras = request?.extras ?: Bundle.EMPTY
+        val callRequest = SimulatedCallRequest.fromBundle(extras)
+        Log.d(TAG, "Metadata extracted for incoming call: $callRequest")
+        
         return SimulatedConnection(this, callRequest)
     }
 
@@ -25,7 +29,13 @@ class SimulatedConnectionService : ConnectionService() {
         connectionManagerPhoneAccount: PhoneAccountHandle?,
         request: ConnectionRequest?
     ) {
-        Log.e(TAG, "onCreateIncomingConnectionFailed")
+        val extras = request?.extras ?: Bundle.EMPTY
+        val callId = extras.getString(TelecomConstants.EXTRA_ALIBI_CALL_ID)
+        Log.e(TAG, "onCreateIncomingConnectionFailed for callId: $callId")
+        
+        if (callId != null) {
+            CallStateManager.removeCall(callId)
+        }
     }
 
 
@@ -34,8 +44,10 @@ class SimulatedConnectionService : ConnectionService() {
         request: ConnectionRequest?
     ): Connection {
         Log.d(TAG, "onCreateOutgoingConnection: ${request?.address}")
-        val callRequest = SimulatedCallRequest.fromBundle(request?.extras ?: Bundle.EMPTY)
-        Log.d(TAG, "Metadata extracted: $callRequest")
+        val extras = request?.extras ?: Bundle.EMPTY
+        val callRequest = SimulatedCallRequest.fromBundle(extras)
+        Log.d(TAG, "Metadata extracted for outgoing call: $callRequest")
+        
         return SimulatedConnection(this, callRequest)
     }
 
@@ -43,7 +55,13 @@ class SimulatedConnectionService : ConnectionService() {
         connectionManagerPhoneAccount: PhoneAccountHandle?,
         request: ConnectionRequest?
     ) {
-        Log.e(TAG, "onCreateOutgoingConnectionFailed")
+        val extras = request?.extras ?: Bundle.EMPTY
+        val callId = extras.getString(TelecomConstants.EXTRA_ALIBI_CALL_ID)
+        Log.e(TAG, "onCreateOutgoingConnectionFailed for callId: $callId")
+        
+        if (callId != null) {
+            CallStateManager.removeCall(callId)
+        }
     }
 
     companion object {

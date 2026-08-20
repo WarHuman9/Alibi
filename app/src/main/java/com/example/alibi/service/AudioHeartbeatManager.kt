@@ -6,6 +6,7 @@ import android.os.Build
 import android.util.Log
 import com.example.alibi.telecom.CallStateManager
 import kotlinx.coroutines.*
+import java.lang.ref.WeakReference
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -24,7 +25,13 @@ class AudioHeartbeatManager private constructor(context: Context) : AudioManager
     private val audioScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     
     // Reference to the active connection for status synchronization
-    var connection: SimulatedConnection? = null
+    private var connectionRef: WeakReference<SimulatedConnection>? = null
+
+    var connection: SimulatedConnection?
+        get() = connectionRef?.get()
+        set(value) {
+            connectionRef = if (value != null) WeakReference(value) else null
+        }
 
     init {
         managerScope.launch {

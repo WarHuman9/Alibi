@@ -15,14 +15,22 @@ class CallAudioRouteManager(private val service: InCallService) {
     private val mainHandler = Handler(Looper.getMainLooper())
 
     fun setSpeaker(enabled: Boolean) {
-        Log.d(TAG, "Setting speaker: $enabled")
-        @Suppress("DEPRECATION")
-        service.setAudioRoute(if (enabled) CallAudioState.ROUTE_SPEAKER else CallAudioState.ROUTE_EARPIECE)
+        try {
+            Log.d(TAG, "Setting speaker: $enabled")
+            @Suppress("DEPRECATION")
+            service.setAudioRoute(if (enabled) CallAudioState.ROUTE_SPEAKER else CallAudioState.ROUTE_EARPIECE)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to set speaker route", e)
+        }
     }
 
     fun setMuted(muted: Boolean) {
-        Log.d(TAG, "Setting mute: $muted")
-        service.setMuted(muted)
+        try {
+            Log.d(TAG, "Setting mute: $muted")
+            service.setMuted(muted)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to set muted state", e)
+        }
     }
 
     /**

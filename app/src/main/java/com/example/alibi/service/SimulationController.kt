@@ -5,6 +5,7 @@ import android.os.Build
 import android.telecom.Call
 import android.telecom.Connection
 import android.util.Log
+import com.example.alibi.telecom.CallAction
 import com.example.alibi.telecom.CallLogSnapshot
 import com.example.alibi.telecom.CallStateManager
 import com.example.alibi.telecom.SimulatedCallRequest
@@ -22,8 +23,21 @@ object SimulationController {
     private const val TAG = "SimulationController"
     private val controllerScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private val activeConnections = ConcurrentHashMap<String, SimulatedConnection>()
-    private val activeJobs = ConcurrentHashMap<String, MutableMap<String, Job>>()
+    private val activeJobs = ConcurrentHashMap<String, ConcurrentHashMap<String, Job>>()
     private val isSimulationAnswered = ConcurrentHashMap<String, AtomicBoolean>()
+
+    init {
+        controllerScope.launch {
+            CallStateManager.actions.collect { (id, action) ->
+                when (action) {
+                    CallAction.ANSWER -> answerSimulatedCall(id)
+                    CallAction.HANGUP -> disconnectSimulatedCall(id)
+                    CallAction.HOLD -> holdSimulatedCall(id, true)
+                    CallAction.RESUME -> holdSimulatedCall(id, false)
+                }
+            }
+        }
+    }
 
     /**
      * Registers a connection and initializes its simulation logic.

@@ -95,6 +95,12 @@ class CallNotificationService : Service() {
                         return@forEach
                     }
                     
+                    val oldState = lastNotificationStates[id]
+                    val isSignificantChange = oldState != null && (
+                        oldState.isIncoming != newState.isIncoming ||
+                        oldState.isDialing != newState.isDialing
+                    )
+
                     Log.d(TelecomConstants.NOTIFICATION_TAG, "[${System.currentTimeMillis()}] observeCallState: State changed for $id.")
                     lastNotificationStates[id] = newState
 
@@ -106,7 +112,8 @@ class CallNotificationService : Service() {
                         isDialing = newState.isDialing,
                         isSimulated = newState.isSimulated,
                         startTime = newState.startTime,
-                        callId = it.id
+                        callId = it.id,
+                        instant = isSignificantChange
                     )
                 }
 
@@ -187,13 +194,14 @@ class CallNotificationService : Service() {
         isDialing: Boolean, 
         isSimulated: Boolean, 
         startTime: Long = 0L, 
-        callId: String? = null
+        callId: String? = null,
+        instant: Boolean = false
     ) {
         if (callId == null) return
 
         // Task 17: 150ms debounce for the FIRST notification of a simulated call
         val isFirst = !activeNotificationIds.containsKey(callId)
-        if (isSimulated && isFirst) {
+        if (isSimulated && isFirst && !instant) {
             debounceJobs[callId]?.cancel()
             debounceJobs[callId] = serviceScope.launch {
                 delay(150L)
@@ -240,7 +248,8 @@ class CallNotificationService : Service() {
                 isDialing = isDialing,
                 isSimulated = isSimulated,
                 startTime = startTime,
-                channelId = channelId
+                channelId = channelId,
+                callId = callId
             )
 
             withContext(Dispatchers.Main) {

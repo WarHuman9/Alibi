@@ -21,16 +21,17 @@ class CallNotificationFactory(private val context: Context) {
         isSimulated: Boolean,
         startTime: Long,
         channelId: String,
+        callId: String
     ): Notification {
         val pendingIntent = createContentIntent()
         
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             buildModernNotification(
-                phoneNumber, name, isIncoming, isMissed, isDialing, isSimulated, startTime, channelId, pendingIntent
+                phoneNumber, name, isIncoming, isMissed, isDialing, isSimulated, startTime, channelId, pendingIntent, callId
             )
         } else {
             buildLegacyNotification(
-                phoneNumber, name, isIncoming, isMissed, isDialing, isSimulated, startTime, channelId, pendingIntent
+                phoneNumber, name, isIncoming, isMissed, isDialing, isSimulated, startTime, channelId, pendingIntent, callId
             )
         }
     }
@@ -47,12 +48,15 @@ class CallNotificationFactory(private val context: Context) {
         )
     }
 
-    private fun createActionIntent(action: String, requestCode: Int): PendingIntent {
+    private fun createActionIntent(action: String, requestCode: Int, callId: String): PendingIntent {
         return PendingIntent.getBroadcast(
             context, 
             requestCode, 
-            Intent(context, CallActionReceiver::class.java).apply { this.action = action }, 
-            PendingIntent.FLAG_IMMUTABLE
+            Intent(context, CallActionReceiver::class.java).apply { 
+                this.action = action 
+                putExtra(TelecomConstants.EXTRA_CALL_ID, callId)
+            }, 
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
     }
 
@@ -66,15 +70,16 @@ class CallNotificationFactory(private val context: Context) {
         isSimulated: Boolean,
         startTime: Long,
         channelId: String,
-        pendingIntent: PendingIntent
+        pendingIntent: PendingIntent,
+        callId: String
     ): Notification {
         val person = Person.Builder()
             .setName(name)
             .setImportant(true)
             .build()
 
-        val hangupIntent = createActionIntent(TelecomConstants.ACTION_HANGUP, 1)
-        val answerIntent = createActionIntent(TelecomConstants.ACTION_ANSWER, 2)
+        val hangupIntent = createActionIntent(TelecomConstants.ACTION_HANGUP, 1, callId)
+        val answerIntent = createActionIntent(TelecomConstants.ACTION_ANSWER, 2, callId)
 
         val builder = Notification.Builder(context, channelId)
             .setSmallIcon(android.R.drawable.ic_menu_call)
@@ -142,10 +147,11 @@ class CallNotificationFactory(private val context: Context) {
         isSimulated: Boolean,
         startTime: Long,
         channelId: String,
-        pendingIntent: PendingIntent
+        pendingIntent: PendingIntent,
+        callId: String
     ): Notification {
-        val hangupIntent = createActionIntent(TelecomConstants.ACTION_HANGUP, 1)
-        val answerIntent = createActionIntent(TelecomConstants.ACTION_ANSWER, 2)
+        val hangupIntent = createActionIntent(TelecomConstants.ACTION_HANGUP, 1, callId)
+        val answerIntent = createActionIntent(TelecomConstants.ACTION_ANSWER, 2, callId)
 
         return NotificationCompat.Builder(context, channelId)
             .setSmallIcon(android.R.drawable.ic_menu_call)

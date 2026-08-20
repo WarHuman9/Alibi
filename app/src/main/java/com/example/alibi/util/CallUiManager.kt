@@ -6,6 +6,8 @@ import android.content.Intent
 import android.util.Log
 import com.example.alibi.MainActivity
 import com.example.alibi.telecom.TelecomConstants
+import java.util.Collections
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Handles UI-related logic for calls, such as launching the main activity.
@@ -13,7 +15,7 @@ import com.example.alibi.telecom.TelecomConstants
  */
 class CallUiManager(private val context: Context) {
     private val TAG = "CallUiManager"
-    private val launchedUiForCalls = mutableSetOf<String>()
+    private val launchedUiForCalls = Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
 
     /**
      * Launches the MainActivity for real calls with selective UI.

@@ -1,6 +1,7 @@
 package com.example.alibi.ui
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.Application
 import android.content.pm.PackageManager
 import android.os.Build
@@ -22,7 +23,7 @@ data class SystemStatus(
     val isNotificationsGranted: Boolean = false,
     val isPhonePermissionsGranted: Boolean = false,
     val isRegistryWarmedUp: Boolean = false,
-    val isRepairing: Boolean = false
+    val isRepairing: Boolean = false,
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -40,6 +41,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    @SuppressLint("MissingPermission")
     fun refreshStatus() {
         viewModelScope.launch {
             val isRoleHeld = RoleHelper.isDialerRoleHeld(context)
@@ -62,7 +64,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     isCallLogGranted = isCallLogGranted,
                     isNotificationsGranted = isNotificationsGranted,
                     isPhonePermissionsGranted = isPhoneGranted,
-                    isRegistryWarmedUp = isWarmedUp
+                    isRegistryWarmedUp = isWarmedUp,
                 )
             }
 
@@ -78,19 +80,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _systemStatus.update { it.copy(isRepairing = true) }
         
         viewModelScope.launch {
-            repeat(15) {
-                telecomHelper.registerPhoneAccount()
-                val isWarmed = telecomHelper.isAccountRegistered()
-                if (isWarmed) {
-                    _systemStatus.update { it.copy(isRegistryWarmedUp = true, isRepairing = false) }
-                    return@launch
+            try {
+                repeat(15) {
+                    telecomHelper.registerPhoneAccount()
+                    val isWarmed = telecomHelper.isAccountRegistered()
+                    if (isWarmed) {
+                        _systemStatus.update { it.copy(isRegistryWarmedUp = true, isRepairing = false) }
+                        return@launch
+                    }
+                    delay(1.seconds)
                 }
-                delay(1.seconds)
+            } finally {
+                _systemStatus.update { it.copy(isRepairing = false) }
             }
-            _systemStatus.update { it.copy(isRepairing = false) }
         }
     }
 
+    @SuppressLint("MissingPermission")
     fun updateRoleStatus(isHeld: Boolean) {
         _systemStatus.update { it.copy(isDialerRoleHeld = isHeld) }
         if (isHeld) {
@@ -123,6 +129,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
     
+    @SuppressLint("MissingPermission")
     fun cleanupLegacy() {
         viewModelScope.launch {
             telecomHelper.cleanupLegacyAccounts()

@@ -13,6 +13,8 @@ import com.example.alibi.telecom.TelecomConstants.EXTRA_INTENDED_DURATION
 import com.example.alibi.telecom.TelecomConstants.EXTRA_MIMIC_SIM_HANDLE
 import com.example.alibi.telecom.TelecomConstants.EXTRA_PHONE_NUMBER
 
+import java.util.UUID
+
 /**
  * Encapsulates all metadata for a simulated call request.
  * Handles serialization to and from [Bundle] for Telecom propagation.
@@ -25,7 +27,7 @@ data class SimulatedCallRequest(
     val simHandle: PhoneAccountHandle? = null,
     val features: Int = 0,
     val autoAnswerDelay: Int = 0,
-    val alibiId: String = "ALIBI_${System.currentTimeMillis()}"
+    val alibiId: String = "ALIBI_${UUID.randomUUID()}"
 ) {
     fun toBundle(): Bundle = Bundle().apply {
         putString(EXTRA_PHONE_NUMBER, phoneNumber)

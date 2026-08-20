@@ -1,73 +1,59 @@
 package com.example.alibi.ui.screens
 
 import android.telecom.Call
-import android.provider.CallLog
-import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.VolumeOff
-import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.Call
-import androidx.compose.material.icons.rounded.CallEnd
-import androidx.compose.material.icons.rounded.Check
-import androidx.compose.material.icons.rounded.Mic
-import androidx.compose.material.icons.rounded.MicOff
 import androidx.compose.material3.*
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
-import androidx.window.core.layout.WindowWidthSizeClass
+import androidx.window.core.layout.WindowSizeClass
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
-import androidx.compose.ui.zIndex
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.alibi.telecom.CallStateManager
 import com.example.alibi.telecom.SimulationPhase
+import com.example.alibi.ui.components.*
 import kotlinx.coroutines.delay
+import java.util.Locale
 import kotlin.time.Duration.Companion.seconds
-import androidx.compose.ui.platform.LocalLocale
 
 @Composable
 fun ActiveCallScreen(
-    phoneNumber: String
+    callId: String
 ) {
-    val state by CallStateManager.state.collectAsState()
+    val state by CallStateManager.state.collectAsStateWithLifecycle()
     
-    val currentCallId = state.currentCallId
     val activeCalls = state.activeCalls
-    val callInfo = activeCalls[currentCallId] ?: activeCalls.values.lastOrNull()
+    val callInfo = activeCalls[callId] ?: activeCalls.values.lastOrNull()
     
     val callState = callInfo?.state ?: Call.STATE_DISCONNECTED
     val simulationPhase = callInfo?.phase ?: SimulationPhase.IDLE
-    val currentCall = callInfo?.call
     val isMuted = state.isMuted
     val speakerOn = state.isSpeakerOn
-    val isHolding = state.isHolding
+    // Explicitly sync hold state from CallMetadata for better reliability
+    val isHolding = callInfo?.isHolding ?: state.isHolding
     
-    // Task 15: Log state changes for debugging
     LaunchedEffect(callState, simulationPhase) {
-        android.util.Log.d("Alibi_UI", "Screen received state change: callState=$callState, phase=$simulationPhase")
+        android.util.Log.d("Alibi_UI", "Screen received state change: callState=$callState, phase=$simulationPhase, isHolding=$isHolding")
     }
     
-    // Task 15: Observe currentCall metadata directly for reliability
-    val displayPhoneNumber = remember(callInfo, phoneNumber) {
-        callInfo?.number ?: phoneNumber
+    val displayPhoneNumber = remember(callInfo) {
+        callInfo?.number ?: "Unknown"
     }
     
     val answerTime = callInfo?.answerTime ?: 0L
     var durationSeconds by remember { mutableLongStateOf(0L) }
     
-    val windowSizeClass = currentWindowAdaptiveInfo().windowSizeClass
-    val isExpanded = windowSizeClass.windowWidthSizeClass == WindowWidthSizeClass.EXPANDED
+    val windowAdaptiveInfo = currentWindowAdaptiveInfo()
+    val isExpanded = windowAdaptiveInfo.windowSizeClass.isWidthAtLeastBreakpoint(WindowSizeClass.WIDTH_DP_EXPANDED_LOWER_BOUND)
 
     LaunchedEffect(callState, answerTime) {
         if (callState == Call.STATE_ACTIVE || callState == Call.STATE_HOLDING) {
@@ -84,21 +70,22 @@ fun ActiveCallScreen(
     }
 
     val isCloaking = CallStateManager.isCloaking
-    val statusText = when {
-        callState == Call.STATE_RINGING -> "Incoming call..."
-        callState == Call.STATE_DIALING || callState == Call.STATE_CONNECTING -> "Calling..."
-        callState == Call.STATE_ACTIVE && isCloaking -> "Calling..."
-        callState == Call.STATE_ACTIVE -> "Active call"
-        callState == Call.STATE_HOLDING -> "Active call"
-        callState == Call.STATE_DISCONNECTED -> "Call Ended"
+    val statusText = when (callState) {
+        Call.STATE_RINGING -> "Incoming call..."
+        Call.STATE_DIALING, Call.STATE_CONNECTING -> "Calling..."
+        Call.STATE_ACTIVE -> if (isCloaking) "Calling..." else "Active call"
+        Call.STATE_HOLDING -> "Active call"
+        Call.STATE_DISCONNECTED -> "Call Ended"
         else -> "Connecting..."
     }
 
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
 
-    val timeText = String.format(LocalLocale.current.platformLocale, "%02d:%02d", durationSeconds / 60, durationSeconds % 60)
+    // Android 10 compatible observable locale
+    val configuration = LocalConfiguration.current
+    val locale = configuration.locales[0]
+    val timeText = String.format(locale, "%02d:%02d", durationSeconds / 60, durationSeconds % 60)
 
-    // Capture the last non-zero duration to prevent flickering on disconnect
     var lastDurationText by remember { mutableStateOf("00:00") }
     if (durationSeconds > 0) {
         lastDurationText = timeText
@@ -128,7 +115,6 @@ fun ActiveCallScreen(
                     )
                 )
         ) {
-            // Task 17: Permanent Hold Badge with Zero Layout Shift
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -152,7 +138,7 @@ fun ActiveCallScreen(
                     }
                     Surface(
                         modifier = Modifier.size(if (isExpanded) 150.dp else 100.dp),
-                        shape = CircleShape,
+                        shape = androidx.compose.foundation.shape.CircleShape,
                         color = MaterialTheme.colorScheme.primaryContainer,
                         tonalElevation = 8.dp
                     ) {
@@ -173,21 +159,20 @@ fun ActiveCallScreen(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Timer - only visible in ACTIVE phase and not cloaked
                 CallTimer(
                     visible = callState == Call.STATE_ACTIVE && !isCloaking,
                     timeText = timeText
                 )
 
-                // Call Controls - visible in DIALING, RINGING, ACTIVE, or HOLDING
                 CallControls(
                     visible = callState != Call.STATE_DISCONNECTED,
                     isMuted = isMuted,
                     speakerOn = speakerOn,
-                    isCloaking = isCloaking
+                    isCloaking = isCloaking,
+                    onToggleMute = { CallStateManager.toggleMute() },
+                    onToggleSpeaker = { CallStateManager.toggleSpeaker() }
                 )
 
-                // End Call final duration - only in DISCONNECTED
                 if (callState == Call.STATE_DISCONNECTED) {
                     Text(
                         text = lastDurationText,
@@ -200,207 +185,4 @@ fun ActiveCallScreen(
             }
         }
     }
-}
-
-@Composable
-private fun CallHeader(statusText: String, phoneNumber: String) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(
-            text = statusText,
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.primary,
-            fontWeight = FontWeight.SemiBold
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Text(
-            text = phoneNumber,
-            style = MaterialTheme.typography.headlineMedium.copy(
-                fontWeight = FontWeight.Bold,
-                fontSize = 36.sp
-            ),
-            color = MaterialTheme.colorScheme.onBackground
-        )
-    }
-}
-
-@Composable
-private fun CallTimer(visible: Boolean, timeText: String) {
-    AnimatedVisibility(
-        visible = visible,
-        enter = fadeIn() + expandVertically(),
-        exit = fadeOut() + shrinkVertically()
-    ) {
-        Text(
-            text = timeText,
-            style = MaterialTheme.typography.displaySmall.copy(
-                fontWeight = FontWeight.Light
-            ),
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-    }
-}
-
-@Composable
-private fun CallControls(
-    visible: Boolean,
-    isMuted: Boolean,
-    speakerOn: Boolean,
-    isCloaking: Boolean
-) {
-    AnimatedVisibility(
-        visible = visible,
-        enter = fadeIn() + expandVertically(),
-        exit = fadeOut() + shrinkVertically()
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Spacer(modifier = Modifier.height(48.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
-                FilledTonalIconButton(
-                    onClick = { CallStateManager.toggleMute() },
-                    enabled = !isCloaking,
-                    colors = IconButtonDefaults.filledTonalIconButtonColors(
-                        containerColor = if (isMuted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
-                        contentColor = if (isMuted) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                ) {
-                    Icon(
-                        imageVector = if (isMuted) Icons.Rounded.MicOff else Icons.Rounded.Mic,
-                        contentDescription = if (isMuted) "Unmute" else "Mute"
-                    )
-                }
-                
-                FilledTonalIconButton(
-                    onClick = { CallStateManager.toggleSpeaker() },
-                    colors = IconButtonDefaults.filledTonalIconButtonColors(
-                        containerColor = if (speakerOn) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
-                        contentColor = if (speakerOn) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                ) {
-                    Icon(
-                        imageVector = if (speakerOn) Icons.AutoMirrored.Rounded.VolumeUp else Icons.AutoMirrored.Rounded.VolumeOff,
-                        contentDescription = "Speaker"
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun HoldBadge(visible: Boolean) {
-    // Task 17: Permanent Hold Badge with state-based colors and Zero Layout Shift
-    val containerColor by animateColorAsState(
-        if (visible) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.1f),
-        label = "containerColor"
-    )
-    val contentColor by animateColorAsState(
-        if (visible) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.2f),
-        label = "contentColor"
-    )
-    val elevation by animateDpAsState(
-        if (visible) 8.dp else 0.dp,
-        label = "elevation"
-    )
-
-    Surface(
-        shape = RoundedCornerShape(24.dp),
-        color = containerColor,
-        tonalElevation = elevation,
-        shadowElevation = if (visible) 6.dp else 0.dp,
-        modifier = Modifier
-            .padding(top = 32.dp)
-            .zIndex(10f)
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                imageVector = Icons.Rounded.MicOff,
-                contentDescription = null,
-                modifier = Modifier.size(20.dp),
-                tint = contentColor
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                text = "CALL ON HOLD",
-                style = MaterialTheme.typography.labelLarge.copy(
-                    fontWeight = FontWeight.ExtraBold,
-                    letterSpacing = 1.2.sp
-                ),
-                color = contentColor
-            )
-        }
-    }
-}
-
-@Composable
-private fun CallActionButtons(
-    callState: Int,
-    onAnswer: () -> Unit,
-    onHangup: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 32.dp),
-        horizontalArrangement = Arrangement.SpaceEvenly,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        // Show Answer button if it's Ringing (Incoming)
-        val showAnswer = callState == Call.STATE_RINGING
-
-        if (showAnswer) {
-            LargeFloatingActionButton(
-                onClick = onAnswer,
-                containerColor = Color(0xFF4CAF50), // Material Green
-                contentColor = Color.White,
-                shape = CircleShape
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.Check,
-                    contentDescription = "Answer Call",
-                    modifier = Modifier.size(36.dp)
-                )
-            }
-        }
-        
-        LargeFloatingActionButton(
-            onClick = onHangup,
-            containerColor = MaterialTheme.colorScheme.error,
-            contentColor = MaterialTheme.colorScheme.onError,
-            shape = CircleShape
-        ) {
-            Icon(
-                imageVector = Icons.Rounded.CallEnd,
-                contentDescription = "End Call",
-                modifier = Modifier.size(36.dp)
-            )
-        }
-    }
-}
-
-@Composable
-private fun PulsingAvatar(infiniteTransition: InfiniteTransition, isExpanded: Boolean) {
-    val pulseScale by infiniteTransition.animateFloat(
-        initialValue = 1f,
-        targetValue = 1.2f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1000, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "pulseScale"
-    )
-    Box(
-        modifier = Modifier
-            .size(if (isExpanded) 180.dp else 120.dp)
-            .scale(pulseScale)
-            .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.2f))
-    )
 }

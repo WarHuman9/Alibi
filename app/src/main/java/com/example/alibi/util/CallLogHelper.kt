@@ -17,6 +17,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
@@ -51,10 +53,8 @@ class CallLogHelper private constructor(private val context: Context) {
     fun getRecentCallsFlow(limit: Int = 500): Flow<List<CallLogItem>> = callbackFlow {
         val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
             override fun onChange(selfChange: Boolean) {
-                // Task 16: Move blocking ContentResolver query to Dispatchers.IO
-                kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
-                    val calls = getRecentCalls(limit)
-                    trySend(calls)
+                helperScope.launch {
+                    trySend(getRecentCalls(limit))
                 }
             }
         }
@@ -72,7 +72,9 @@ class CallLogHelper private constructor(private val context: Context) {
         }
 
         // Initial push
-        trySend(getRecentCalls(limit))
+        launch {
+            trySend(getRecentCalls(limit))
+        }
 
         awaitClose {
             try {
@@ -81,7 +83,9 @@ class CallLogHelper private constructor(private val context: Context) {
                 Log.e(TAG, "Error unregistering ContentObserver", e)
             }
         }
-    }.onStart { emit(getRecentCalls(limit)) }
+    }
+    .flowOn(Dispatchers.IO)
+    .conflate()
 
     /**
      * Fetches the recent calls from the system database.
@@ -104,36 +108,24 @@ class CallLogHelper private constructor(private val context: Context) {
             )
 
             cursor?.use {
-                val idIdx = it.getColumnIndex(CallLog.Calls._ID)
-                val numIdx = it.getColumnIndex(CallLog.Calls.NUMBER)
-                val typeIdx = it.getColumnIndex(CallLog.Calls.TYPE)
-                val dateIdx = it.getColumnIndex(CallLog.Calls.DATE)
-                val durIdx = it.getColumnIndex(CallLog.Calls.DURATION)
-                val nameIdx = it.getColumnIndex(CallLog.Calls.CACHED_NAME)
-                val formatIdx = it.getColumnIndex(CallLog.Calls.CACHED_FORMATTED_NUMBER)
-                val numTypeIdx = it.getColumnIndex(CallLog.Calls.CACHED_NUMBER_TYPE)
-                val featIdx = it.getColumnIndex(CallLog.Calls.FEATURES)
-                val accIdx = it.getColumnIndex(CallLog.Calls.PHONE_ACCOUNT_ID)
-                val compIdx = it.getColumnIndex(CallLog.Calls.PHONE_ACCOUNT_COMPONENT_NAME)
-
                 var count = 0
                 while (it.moveToNext() && (count < limit)) {
-                    val rawNumber = it.getString(numIdx)
-                    val cachedFormat = if (formatIdx != -1) it.getString(formatIdx) else null
+                    val rawNumber = it.getStringSafe(CallLog.Calls.NUMBER)
+                    val cachedFormat = it.getStringSafe(CallLog.Calls.CACHED_FORMATTED_NUMBER)
                     
                     list.add(
                         CallLogItem(
-                            id = it.getLong(idIdx),
+                            id = it.getLongSafe(CallLog.Calls._ID),
                             number = rawNumber ?: cachedFormat ?: "Unknown",
-                            type = it.getInt(typeIdx),
-                            date = it.getLong(dateIdx),
-                            duration = it.getLong(durIdx),
-                            name = if (nameIdx != -1) it.getString(nameIdx) else null,
+                            type = it.getIntSafe(CallLog.Calls.TYPE),
+                            date = it.getLongSafe(CallLog.Calls.DATE),
+                            duration = it.getLongSafe(CallLog.Calls.DURATION),
+                            name = it.getStringSafe(CallLog.Calls.CACHED_NAME),
                             formattedNumber = cachedFormat,
-                            numberType = if (numTypeIdx != -1) it.getInt(numTypeIdx) else 0,
-                            features = if (featIdx != -1) it.getInt(featIdx) else 0,
-                            phoneAccountId = if (accIdx != -1) it.getString(accIdx) else null,
-                            phoneAccountComponent = if (compIdx != -1) it.getString(compIdx) else null
+                            numberType = it.getIntSafe(CallLog.Calls.CACHED_NUMBER_TYPE),
+                            features = it.getIntSafe(CallLog.Calls.FEATURES),
+                            phoneAccountId = it.getStringSafe(CallLog.Calls.PHONE_ACCOUNT_ID),
+                            phoneAccountComponent = it.getStringSafe(CallLog.Calls.PHONE_ACCOUNT_COMPONENT_NAME)
                         )
                     )
                     count++

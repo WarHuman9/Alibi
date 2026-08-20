@@ -5,12 +5,13 @@ import android.provider.CallLog
 import android.telecom.Call
 import android.telecom.PhoneAccountHandle
 import android.util.Log
+import com.example.alibi.util.getAlibiId
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.*
 import android.os.Build
-import androidx.core.content.edit
 
 /**
  * Pure data registry for call state across the application.
@@ -71,12 +72,28 @@ data class CallManagerState(
     val isHolding: Boolean = false
 )
 
+/**
+ * Actions that can be performed on a call, observed by simulation controllers.
+ */
+enum class CallAction {
+    ANSWER,
+    HANGUP,
+    HOLD,
+    RESUME
+}
+
 object CallStateManager {
     private const val TAG = "CallStateManager"
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     private val _state = MutableStateFlow(CallManagerState())
     val state: StateFlow<CallManagerState> = _state.asStateFlow()
+
+    private val _actions = MutableSharedFlow<Pair<String, CallAction>>(
+        extraBufferCapacity = 64,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+    val actions: SharedFlow<Pair<String, CallAction>> = _actions.asSharedFlow()
 
     // Derived properties
     val activeCalls: StateFlow<Map<String, CallMetadata>> = _state
@@ -140,42 +157,6 @@ object CallStateManager {
 
     val isMuted: StateFlow<Boolean> = _state.map { it.isMuted }.stateIn(scope, SharingStarted.Eagerly, false)
     val isSpeakerOn: StateFlow<Boolean> = _state.map { it.isSpeakerOn }.stateIn(scope, SharingStarted.Eagerly, false)
-
-    private var nextCallStartTime: Long? = null
-    private var nextCallDuration: Long? = null
-    private var nextCallSimHandle: PhoneAccountHandle? = null
-    private var nextCallFeatures: Int = 0
-
-    // Task 20: Persisted SIM Selection
-    private const val PREFS_NAME = "alibi_call_manager_prefs"
-    private const val KEY_SIM_ID = "mimic_sim_id"
-    private const val KEY_SIM_COMP = "mimic_sim_component"
-
-    fun getPersistedSimHandle(context: Context): PhoneAccountHandle? {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val id = prefs.getString(KEY_SIM_ID, null) ?: return null
-        val comp = prefs.getString(KEY_SIM_COMP, null) ?: return null
-        return try {
-            val component = android.content.ComponentName.unflattenFromString(comp) ?: return null
-            PhoneAccountHandle(component, id)
-        } catch (e: Exception) {
-            null
-        }
-    }
-
-    fun setMimicSimHandle(context: Context, handle: PhoneAccountHandle?) {
-        nextCallSimHandle = handle
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit {
-            if (handle != null) {
-                putString(KEY_SIM_ID, handle.id)
-                putString(KEY_SIM_COMP, handle.componentName.flattenToString())
-            } else {
-                remove(KEY_SIM_ID)
-                remove(KEY_SIM_COMP)
-            }
-        }
-    }
 
     val isCloaking: Boolean
         get() {
@@ -360,15 +341,8 @@ object CallStateManager {
         _state.value = CallManagerState()
     }
 
-    fun setCustomStartTime(timestamp: Long?) { nextCallStartTime = timestamp }
-    fun setIntendedDuration(duration: Long?) { nextCallDuration = duration }
-    fun setCallFeatures(features: Int) { nextCallFeatures = features }
-
     fun onCallAdded(call: Call, isSimulated: Boolean? = null, handler: android.os.Handler? = null) {
-        val extras = call.details.extras ?: android.os.Bundle.EMPTY
-        val alibiId = extras.getString(TelecomConstants.EXTRA_ALIBI_CALL_ID)
-        val connectionId = extras.getString(TelecomConstants.EXTRA_CONNECTION_ID)
-        val id = alibiId ?: connectionId ?: call.hashCode().toString()
+        val id = call.getAlibiId()
         
         val state = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             call.details.state
@@ -403,10 +377,10 @@ object CallStateManager {
             name = call.details.callerDisplayName ?: call.details.handle?.schemeSpecificPart ?: "Unknown",
             state = state,
             phase = initialPhase,
-            startTime = nextCallStartTime ?: System.currentTimeMillis(),
+            startTime = System.currentTimeMillis(),
             answerTime = if (state == Call.STATE_ACTIVE) System.currentTimeMillis() else 0L,
-            simHandle = if (isRealCall) call.details.accountHandle else (nextCallSimHandle ?: call.details.accountHandle),
-            features = nextCallFeatures,
+            simHandle = if (isRealCall) call.details.accountHandle else call.details.accountHandle,
+            features = 0,
             isHolding = (state == Call.STATE_HOLDING)
         )
         
@@ -433,10 +407,7 @@ object CallStateManager {
     }
 
     fun onCallRemoved(call: Call) {
-        val extras = call.details.extras ?: android.os.Bundle.EMPTY
-        val alibiId = extras.getString(TelecomConstants.EXTRA_ALIBI_CALL_ID)
-        val connectionId = extras.getString(TelecomConstants.EXTRA_CONNECTION_ID)
-        val id = alibiId ?: connectionId ?: call.hashCode().toString()
+        val id = call.getAlibiId()
         call.unregisterCallback(callCallback)
         removeCall(id)
     }
@@ -557,19 +528,21 @@ object CallStateManager {
         return _state.value.activeCalls.values.any { it.isSimulated && it.state != Call.STATE_DISCONNECTED }
     }
 
-    fun answer() {
-        val callInfo = _state.value.activeCalls[_state.value.currentCallId] ?: _state.value.activeCalls.values.find { it.state == Call.STATE_RINGING }
+    fun answer(id: String? = null) {
+        val targetId = id ?: _state.value.currentCallId
+        val callInfo = _state.value.activeCalls[targetId] ?: _state.value.activeCalls.values.find { it.state == Call.STATE_RINGING }
         if (callInfo?.isSimulated == true) {
-            com.example.alibi.service.SimulationController.answerSimulatedCall(callInfo.id)
+            _actions.tryEmit(callInfo.id to CallAction.ANSWER)
         } else {
             callInfo?.call?.answer(0)
         }
     }
 
-    fun disconnect() {
-        val callInfo = _state.value.activeCalls[_state.value.currentCallId] ?: _state.value.activeCalls.values.lastOrNull()
+    fun disconnect(id: String? = null) {
+        val targetId = id ?: _state.value.currentCallId
+        val callInfo = _state.value.activeCalls[targetId] ?: _state.value.activeCalls.values.lastOrNull()
         if (callInfo?.isSimulated == true) {
-            com.example.alibi.service.SimulationController.disconnectSimulatedCall(callInfo.id)
+            _actions.tryEmit(callInfo.id to CallAction.HANGUP)
         } else {
             callInfo?.call?.disconnect()
         }

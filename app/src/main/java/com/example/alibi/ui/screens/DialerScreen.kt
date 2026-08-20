@@ -43,7 +43,6 @@ enum class PhoneSubTab { RECENTS, CONTACTS }
 /**
  * Main Dialer interface. Manages sub-tabs, search, and the interactive dial pad.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DialerScreen(initialNumber: String? = null) {
     val context = LocalContext.current
@@ -131,11 +130,17 @@ fun DialerScreen(initialNumber: String? = null) {
                         )
                     }
                 } else {
+                    val filteredCalls = remember(searchQuery, displayCalls) {
+                        displayCalls.filter { 
+                            it.number.contains(searchQuery) || 
+                            (it.name?.contains(searchQuery, true) ?: false) 
+                        }
+                    }
                     when (selectedTab) {
                         PhoneSubTab.RECENTS -> {
                             RecentCallsList(
                                 state = listState,
-                                calls = displayCalls.filter { it.number.contains(searchQuery) || (it.name?.contains(searchQuery, true) ?: false) },
+                                calls = filteredCalls,
                                 sims = simAccounts,
                                 onCallClick = { 
                                     phoneNumber = it
@@ -334,7 +339,6 @@ private fun formatDuration(seconds: Long): String {
     return if (seconds >= 60) "${seconds / 60}m ${seconds % 60}s" else "${seconds}s"
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DialPad(phoneNumber: String, selectedSim: TelecomHelper.SimAccount?, availableSims: List<TelecomHelper.SimAccount>, onDigitClick: (String) -> Unit, onBackspace: () -> Unit, onSimSelected: (TelecomHelper.SimAccount) -> Unit, onCallClick: () -> Unit) {
     Surface(
