@@ -21,6 +21,7 @@ import androidx.core.content.ContextCompat
 import android.content.pm.PackageManager
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.alibi.util.ContactsHelper
+import com.example.alibi.MainActivity
 
 data class ContactItem(val name: String, val number: String)
 
@@ -31,10 +32,9 @@ fun ContactsScreen(
 ) {
     val context = LocalContext.current
     val contactsHelper = remember { ContactsHelper(context) }
+    val systemStatus = MainActivity.LocalSystemStatus.current
     
-    val hasPermission by remember { 
-        mutableStateOf(ContextCompat.checkSelfPermission(context, android.Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED)
-    }
+    val hasPermission = systemStatus.isPhonePermissionsGranted
 
     val contacts by if (hasPermission) {
         contactsHelper.getContactsFlow().collectAsStateWithLifecycle(initialValue = null)

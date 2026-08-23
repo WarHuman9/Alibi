@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.launch
 
 /**
@@ -34,15 +35,11 @@ class ContactsHelper(private val context: Context) {
             observer
         )
 
-        // Initial fetch
-        launch {
-            trySend(fetchContacts())
-        }
-
         awaitClose {
             context.contentResolver.unregisterContentObserver(observer)
         }
     }
+    .onStart { emit(fetchContacts()) }
     .flowOn(Dispatchers.IO)
     .distinctUntilChanged()
     .conflate()
@@ -62,8 +59,10 @@ class ContactsHelper(private val context: Context) {
         cursor?.use {
             while (it.moveToNext()) {
                 val name = it.getStringSafe(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME) ?: "Unknown"
-                val number = it.getStringSafe(ContactsContract.CommonDataKinds.Phone.NUMBER) ?: ""
-                list.add(ContactItem(name, number))
+                val number = it.getStringSafe(ContactsContract.CommonDataKinds.Phone.NUMBER)
+                if (!number.isNullOrBlank()) {
+                    list.add(ContactItem(name, number))
+                }
             }
         }
         return list

@@ -1,6 +1,5 @@
 package com.example.alibi.telecom
 
-import android.content.Context
 import android.provider.CallLog
 import android.telecom.Call
 import android.telecom.PhoneAccountHandle
@@ -162,7 +161,7 @@ object CallStateManager {
         get() {
             val active = _state.value.activeCalls.values.find { it.phase != SimulationPhase.IDLE }
             return (active?.phase == SimulationPhase.DIALING || active?.phase == SimulationPhase.RINGING) &&
-                    (active.state == Call.STATE_ACTIVE)
+                    (active?.state == Call.STATE_ACTIVE)
         }
 
     @Volatile var onCallStateChangedHook: ((Call, Int) -> Unit)? = null
@@ -529,7 +528,7 @@ object CallStateManager {
     }
 
     fun answer(id: String? = null) {
-        val targetId = id ?: _state.value.currentCallId
+        val targetId = id ?: _state.value.currentCallId ?: return
         val callInfo = _state.value.activeCalls[targetId] ?: _state.value.activeCalls.values.find { it.state == Call.STATE_RINGING }
         if (callInfo?.isSimulated == true) {
             _actions.tryEmit(callInfo.id to CallAction.ANSWER)
@@ -539,7 +538,7 @@ object CallStateManager {
     }
 
     fun disconnect(id: String? = null) {
-        val targetId = id ?: _state.value.currentCallId
+        val targetId = id ?: _state.value.currentCallId ?: return
         val callInfo = _state.value.activeCalls[targetId] ?: _state.value.activeCalls.values.lastOrNull()
         if (callInfo?.isSimulated == true) {
             _actions.tryEmit(callInfo.id to CallAction.HANGUP)
@@ -579,7 +578,7 @@ object CallStateManager {
         }
     }
 
-    fun unregisterConnection(id: String, context: Context) {
+    fun unregisterConnection(id: String) {
         removeCall(id)
     }
 
@@ -589,20 +588,5 @@ object CallStateManager {
     private fun isCloaked(info: CallMetadata, newState: Int): Boolean {
         if (!info.isSimulated) return false
         return (info.phase == SimulationPhase.DIALING || info.phase == SimulationPhase.RINGING) && newState == Call.STATE_ACTIVE
-    }
-
-    private fun callStateToString(state: Int): String {
-        return when (state) {
-            Call.STATE_NEW -> "NEW"
-            Call.STATE_RINGING -> "RINGING"
-            Call.STATE_DIALING -> "DIALING"
-            Call.STATE_ACTIVE -> "ACTIVE"
-            Call.STATE_HOLDING -> "HOLDING"
-            Call.STATE_DISCONNECTED -> "DISCONNECTED"
-            Call.STATE_CONNECTING -> "CONNECTING"
-            Call.STATE_SELECT_PHONE_ACCOUNT -> "SELECT_PHONE_ACCOUNT"
-            Call.STATE_DISCONNECTING -> "DISCONNECTING"
-            else -> "UNKNOWN($state)"
-        }
     }
 }

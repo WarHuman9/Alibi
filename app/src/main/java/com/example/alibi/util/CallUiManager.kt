@@ -35,7 +35,9 @@ class CallUiManager(private val context: Context) {
         }
         
         val pendingIntent = PendingIntent.getActivity(
-            context, 0, uiIntent, 
+            context, 
+            callId.hashCode(), 
+            uiIntent, 
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         

@@ -110,11 +110,11 @@ class TelecomHelper(private val context: Context) {
         
         try {
             telecomManager.callCapablePhoneAccounts.mapNotNull { handle ->
-                val account = telecomManager.getPhoneAccount(handle)
-                if (handle.componentName.packageName != context.packageName) {
+                val account = telecomManager.getPhoneAccount(handle) ?: return@mapNotNull null
+                if (handle.componentName?.packageName != context.packageName) {
                     SimAccount(
                         handle = handle,
-                        label = account.label.toString(),
+                        label = account.label?.toString() ?: "Unknown",
                         address = account.address?.schemeSpecificPart
                     )
                 } else null
@@ -190,7 +190,7 @@ class TelecomHelper(private val context: Context) {
             
             handles.forEach { handle ->
                 // Safety Guard: Only touch accounts belonging to OUR package
-                if (handle.componentName.packageName == context.packageName) {
+                if (handle.componentName?.packageName == context.packageName) {
                     // Purge if ID is in legacy list OR if it's not our stable ID
                     val isLegacy = TelecomConstants.LEGACY_ACCOUNT_IDS.contains(handle.id)
                     val isNotStable = handle.id != SIMULATED_ACCOUNT_ID
@@ -278,7 +278,12 @@ class TelecomHelper(private val context: Context) {
         }
         
         // Duplicate for OEMs (Samsung/Pixel) that look in nested bundle
-        val outgoingExtras = Bundle(extras)
+        // Bug 14: Avoid circular reference by creating a fresh bundle for nested extras
+        val outgoingExtras = Bundle().apply {
+            putParcelable(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, phoneAccountHandle)
+            // Copy request metadata but NOT the root extras bundle itself
+            putAll(request.toBundle())
+        }
         extras.putBundle(TelecomManager.EXTRA_OUTGOING_CALL_EXTRAS, outgoingExtras)
 
         val uri = Uri.fromParts("tel", phoneNumber, null)

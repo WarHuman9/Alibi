@@ -8,7 +8,6 @@ import android.os.IBinder
 import android.os.PowerManager
 import android.util.Log
 import android.content.pm.ServiceInfo
-import com.example.alibi.MainActivity
 import com.example.alibi.receiver.CallActionReceiver
 import com.example.alibi.service.factory.CallNotificationFactory
 import com.example.alibi.telecom.CallStateManager
@@ -67,7 +66,8 @@ class CallNotificationService : Service() {
                     Log.d(TelecomConstants.NOTIFICATION_TAG, "[${System.currentTimeMillis()}] observeCallState: No active calls. Scheduling delayed stop.")
                     startDelayedStopCheck()
                     // Task 17: Cancel all lingering notifications if any
-                    activeNotificationIds.keys.toList().forEach { cancelNotification(it) }
+                    val idsToCancel = notificationMutex.withLock { activeNotificationIds.keys.toList() }
+                    idsToCancel.forEach { cancelNotification(it) }
                     return@collect
                 }
                 
@@ -118,7 +118,9 @@ class CallNotificationService : Service() {
                 }
 
                 // Task 17: Clear stale notifications for calls that are gone
-                val staleIds = activeNotificationIds.keys.filter { !calls.containsKey(it) }
+                val staleIds = notificationMutex.withLock { 
+                    activeNotificationIds.keys.filter { !calls.containsKey(it) }
+                }
                 staleIds.forEach { cancelNotification(it) }
             }
         }
@@ -130,8 +132,11 @@ class CallNotificationService : Service() {
         if (intent?.action == TelecomConstants.ACTION_STOP_SERVICE) {
             Log.d(TelecomConstants.NOTIFICATION_TAG, "[${System.currentTimeMillis()}] onStartCommand: STOP_SERVICE action received. Stopping.")
             // Clear everything before stopping
-            activeNotificationIds.keys.toList().forEach { cancelNotification(it) }
-            stopSelf()
+            serviceScope.launch {
+                val idsToCancel = notificationMutex.withLock { activeNotificationIds.keys.toList() }
+                idsToCancel.forEach { cancelNotification(it) }
+                stopSelf()
+            }
             return START_NOT_STICKY
         }
 
@@ -271,7 +276,48 @@ class CallNotificationService : Service() {
         }
     }
 
+    private fun cancelNotification(callId: String) {
+        serviceScope.launch {
+            notificationMutex.withLock {
+                debounceJobs.remove(callId)?.cancel()
+                val id = activeNotificationIds.remove(callId)
+                activeNotifications.remove(callId)
+                lastNotificationStates.remove(callId)
+                
+                if (id != null) {
+                    notificationManager.cancel(id)
+                    Log.d(TelecomConstants.NOTIFICATION_TAG, "Cancelled notification for $callId (id=$id)")
+                }
+
+                if (foregroundCallId == callId) {
+                    foregroundCallId = null
+                    // Promote next active call to foreground
+                    val nextEntry = activeNotificationIds.entries.firstOrNull()
+                    if (nextEntry != null) {
+                        val nextCallId = nextEntry.key
+                        val nextNotification = activeNotifications[nextCallId]
+                        if (nextNotification != null) {
+                            updateForegroundInternal(nextCallId, nextNotification)
+                        }
+                    } else {
+                        Log.d(TelecomConstants.NOTIFICATION_TAG, "No more calls. Stopping foreground.")
+                        stopForeground(STOP_FOREGROUND_REMOVE)
+                        startDelayedStopCheck()
+                    }
+                }
+            }
+        }
+    }
+
     private fun updateForeground(callId: String, notification: Notification) {
+        serviceScope.launch {
+            notificationMutex.withLock {
+                updateForegroundInternal(callId, notification)
+            }
+        }
+    }
+
+    private fun updateForegroundInternal(callId: String, notification: Notification) {
         val id = activeNotificationIds.getOrPut(callId) { getNotificationId(callId) }
         foregroundCallId = callId
         Log.d(TelecomConstants.NOTIFICATION_TAG, "startForeground for call $callId with id $id")
@@ -280,34 +326,6 @@ class CallNotificationService : Service() {
             startForeground(id, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL)
         } else {
             startForeground(id, notification)
-        }
-    }
-
-    private fun cancelNotification(callId: String) {
-        debounceJobs.remove(callId)?.cancel()
-        val id = activeNotificationIds.remove(callId)
-        activeNotifications.remove(callId)
-        lastNotificationStates.remove(callId)
-        
-        if (id != null) {
-            notificationManager.cancel(id)
-            Log.d(TelecomConstants.NOTIFICATION_TAG, "Cancelled notification for $callId (id=$id)")
-        }
-
-        if (foregroundCallId == callId) {
-            foregroundCallId = null
-            // Promote next active call to foreground
-            val nextCallId = activeNotificationIds.keys.firstOrNull()
-            if (nextCallId != null) {
-                val nextNotification = activeNotifications[nextCallId]
-                if (nextNotification != null) {
-                    updateForeground(nextCallId, nextNotification)
-                }
-            } else {
-                Log.d(TelecomConstants.NOTIFICATION_TAG, "No more calls. Stopping foreground.")
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                startDelayedStopCheck()
-            }
         }
     }
 
@@ -362,7 +380,13 @@ class CallNotificationService : Service() {
             wakeLock?.release()
         }
         // Ensure ALL notifications are cancelled on destroy
-        activeNotificationIds.values.forEach { notificationManager.cancel(it) }
+        serviceScope.launch {
+            notificationMutex.withLock {
+                activeNotificationIds.values.forEach { notificationManager.cancel(it) }
+                activeNotificationIds.clear()
+                activeNotifications.clear()
+            }
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

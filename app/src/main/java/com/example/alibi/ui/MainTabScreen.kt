@@ -13,7 +13,6 @@ import com.example.alibi.ui.screens.SetupScreen
 
 @Composable
 fun MainTabScreen(
-    initialNumber: String? = null,
     onNavigateToCall: (String) -> Unit
 ) {
     var activeTab by rememberSaveable { mutableStateOf("phone") }
@@ -35,7 +34,7 @@ fun MainTabScreen(
         }
     ) {
         when (activeTab) {
-            "phone" -> DialerScreen(initialNumber = initialNumber)
+            "phone" -> DialerScreen()
             "simulate" -> SetupScreen(onNavigateToCall = onNavigateToCall)
         }
     }

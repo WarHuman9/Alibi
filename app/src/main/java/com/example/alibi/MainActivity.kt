@@ -43,17 +43,13 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         
-        // --- Smart System Reset ---
-        // Only wipe state if no call is active. This prevents the "Timer Chip" crash.
-        if (!CallStateManager.isBusy.value) {
-            Log.d("MainActivity", "Initializing system...")
-        }
-
         // CRITICAL: Pre-register the simulation account before any call attempts.
         viewModel.onTelecomInitialization()
 
-        val initialNumber = intent?.data?.schemeSpecificPart?.takeIf {
+        intent?.data?.schemeSpecificPart?.takeIf {
             intent.action == Intent.ACTION_DIAL || intent.action == Intent.ACTION_VIEW
+        }?.let { number ->
+            viewModel.onDeeplinkReceived(number)
         }
 
         setContent {
@@ -61,7 +57,7 @@ class MainActivity : ComponentActivity() {
             
             AppOnboarding(status) {
                 AlibiTheme {
-                    AlibiApp(initialNumber)
+                    AlibiApp()
                 }
             }
         }
@@ -69,8 +65,13 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        // Redirection handled by reactive navigation in AlibiApp
         setIntent(intent)
+        
+        intent.data?.schemeSpecificPart?.takeIf {
+            intent.action == Intent.ACTION_DIAL || intent.action == Intent.ACTION_VIEW
+        }?.let { number ->
+            viewModel.onDeeplinkReceived(number)
+        }
     }
 
     /**
@@ -130,7 +131,9 @@ class MainActivity : ComponentActivity() {
         }
 
         // Consolidate permission chain logic while preserving the reverse sequence.
-        LaunchedEffect(Unit) {
+        LaunchedEffect(lifecycleState) {
+            if (lifecycleState != Lifecycle.State.RESUMED) return@LaunchedEffect
+            
             val needsNotifications = Build.VERSION.SDK_INT >= 33 &&
                     ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
             
@@ -190,7 +193,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun AlibiApp(initialNumber: String? = null) {
+fun AlibiApp() {
     val backStack = rememberNavBackStack(MainTabsRoute)
     val activeCalls by CallStateManager.activeCalls.collectAsStateWithLifecycle()
 
@@ -204,7 +207,7 @@ fun AlibiApp(initialNumber: String? = null) {
 
         if (callToShow != null) {
             val callId = callToShow.id
-            if (backStack.lastOrNull() !is ActiveCallRoute) {
+            if (callId.isNotBlank() && backStack.lastOrNull() !is ActiveCallRoute) {
                 backStack.add(ActiveCallRoute(callId))
             }
         } else {
@@ -225,7 +228,6 @@ fun AlibiApp(initialNumber: String? = null) {
             when (key) {
                 is MainTabsRoute -> NavEntry(key) {
                     MainTabScreen(
-                        initialNumber = initialNumber,
                         onNavigateToCall = { _ ->
                             // Manual navigation from Setup/Dialer is now largely reactive
                             // but we keep the callback for consistency if needed.

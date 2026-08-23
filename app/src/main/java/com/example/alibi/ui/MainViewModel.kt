@@ -34,6 +34,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _systemStatus = MutableStateFlow(SystemStatus())
     val systemStatus = _systemStatus.asStateFlow()
 
+    private val _deeplinkNumber = MutableStateFlow<String?>(null)
+    val deeplinkNumber = _deeplinkNumber.asStateFlow()
+
     init {
         // Initial registration attempt
         viewModelScope.launch {
@@ -134,5 +137,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             telecomHelper.cleanupLegacyAccounts()
         }
+    }
+
+    fun onDeeplinkReceived(number: String) {
+        _deeplinkNumber.value = number
+    }
+
+    fun consumeDeeplink() {
+        _deeplinkNumber.value = null
     }
 }

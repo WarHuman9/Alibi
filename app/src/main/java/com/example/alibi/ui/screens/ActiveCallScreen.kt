@@ -32,14 +32,22 @@ fun ActiveCallScreen(
     val state by CallStateManager.state.collectAsStateWithLifecycle()
     
     val activeCalls = state.activeCalls
-    val callInfo = activeCalls[callId] ?: activeCalls.values.lastOrNull()
+    val callInfo = activeCalls[callId]
     
-    val callState = callInfo?.state ?: Call.STATE_DISCONNECTED
-    val simulationPhase = callInfo?.phase ?: SimulationPhase.IDLE
+    if (callInfo == null) {
+        // Fallback for when call is removed from state but screen is still transitioning
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator()
+        }
+        return
+    }
+    
+    val callState = callInfo.state
+    val simulationPhase = callInfo.phase
     val isMuted = state.isMuted
     val speakerOn = state.isSpeakerOn
     // Explicitly sync hold state from CallMetadata for better reliability
-    val isHolding = callInfo?.isHolding ?: state.isHolding
+    val isHolding = callInfo.isHolding
     
     LaunchedEffect(callState, simulationPhase) {
         android.util.Log.d("Alibi_UI", "Screen received state change: callState=$callState, phase=$simulationPhase, isHolding=$isHolding")

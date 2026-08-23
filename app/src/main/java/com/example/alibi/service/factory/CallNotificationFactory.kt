@@ -10,6 +10,7 @@ import com.example.alibi.MainActivity
 import com.example.alibi.receiver.CallActionReceiver
 import com.example.alibi.telecom.TelecomConstants
 
+@Suppress("unused")
 class CallNotificationFactory(private val context: Context) {
 
     fun createNotification(
@@ -21,7 +22,7 @@ class CallNotificationFactory(private val context: Context) {
         isSimulated: Boolean,
         startTime: Long,
         channelId: String,
-        callId: String
+        callId: String,
     ): Notification {
         val pendingIntent = createContentIntent()
         

@@ -52,14 +52,19 @@ data class SimulatedCallRequest(
             }
 
             fun getInt(key: String, default: Int): Int {
-                val v = bundle.getInt(key, -1).takeIf { it != -1 }
-                if (v != null) return v
-                return outgoingExtras.getInt(key, default)
+                return when {
+                    bundle.containsKey(key) -> bundle.getInt(key)
+                    outgoingExtras.containsKey(key) -> outgoingExtras.getInt(key)
+                    else -> default
+                }
             }
 
             fun getLong(key: String): Long? {
-                return bundle.getLong(key, -1L).takeIf { it != -1L }
-                    ?: outgoingExtras.getLong(key, -1L).takeIf { it != -1L }
+                return when {
+                    bundle.containsKey(key) -> bundle.getLong(key)
+                    outgoingExtras.containsKey(key) -> outgoingExtras.getLong(key)
+                    else -> null
+                }
             }
 
             val simHandle = if (Build.VERSION.SDK_INT >= 33) {

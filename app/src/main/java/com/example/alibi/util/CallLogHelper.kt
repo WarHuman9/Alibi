@@ -71,11 +71,6 @@ class CallLogHelper private constructor(private val context: Context) {
             trySend(emptyList())
         }
 
-        // Initial push
-        launch {
-            trySend(getRecentCalls(limit))
-        }
-
         awaitClose {
             try {
                 context.contentResolver.unregisterContentObserver(observer)
@@ -83,6 +78,10 @@ class CallLogHelper private constructor(private val context: Context) {
                 Log.e(TAG, "Error unregistering ContentObserver", e)
             }
         }
+    }
+    .onStart { 
+        // Bug 28: Ensure early collectors get data immediately on IO thread
+        emit(getRecentCalls(limit)) 
     }
     .flowOn(Dispatchers.IO)
     .conflate()
@@ -113,10 +112,16 @@ class CallLogHelper private constructor(private val context: Context) {
                     val rawNumber = it.getStringSafe(CallLog.Calls.NUMBER)
                     val cachedFormat = it.getStringSafe(CallLog.Calls.CACHED_FORMATTED_NUMBER)
                     
+                    // Bug 29: Harden number resolution to prevent "Unknown" pollution
+                    val resolvedNumber = rawNumber 
+                        ?: cachedFormat 
+                        ?: it.getStringSafe(CallLog.Calls.CACHED_NAME) 
+                        ?: "Unknown"
+
                     list.add(
                         CallLogItem(
                             id = it.getLongSafe(CallLog.Calls._ID),
-                            number = rawNumber ?: cachedFormat ?: "Unknown",
+                            number = resolvedNumber,
                             type = it.getIntSafe(CallLog.Calls.TYPE),
                             date = it.getLongSafe(CallLog.Calls.DATE),
                             duration = it.getLongSafe(CallLog.Calls.DURATION),
@@ -170,9 +175,12 @@ class CallLogHelper private constructor(private val context: Context) {
                     if (features != 0) {
                         put(CallLog.Calls.FEATURES, features)
                     }
-                    if (simHandle != null) {
-                        put(CallLog.Calls.PHONE_ACCOUNT_COMPONENT_NAME, simHandle.componentName.flattenToString())
-                        put(CallLog.Calls.PHONE_ACCOUNT_ID, simHandle.id)
+                    // Bug 25: Safely handle null componentName
+                    simHandle?.let { handle ->
+                        handle.componentName?.let { comp ->
+                            put(CallLog.Calls.PHONE_ACCOUNT_COMPONENT_NAME, comp.flattenToString())
+                        }
+                        put(CallLog.Calls.PHONE_ACCOUNT_ID, handle.id)
                     }
                 }
                 

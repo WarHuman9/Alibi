@@ -118,6 +118,7 @@ class CallService : InCallService() {
     }
 
 
+    @Suppress("unused", "DEPRECATION")
     @Deprecated("Deprecated in Java")
     override fun onCallAudioStateChanged(audioState: android.telecom.CallAudioState?) {
         // Update audio state for all calls to ensure UI is in sync
@@ -135,8 +136,8 @@ class CallService : InCallService() {
         }
         
         val id = call.getAlibiId()
-        val callInfo = CallStateManager.activeCalls.value[id]
-        val phase = callInfo?.phase
+        val callInfo = CallStateManager.activeCalls.value[id] ?: return
+        val phase = callInfo.phase
         val isDialingPhase = phase == com.example.alibi.telecom.SimulationPhase.DIALING || 
                            phase == com.example.alibi.telecom.SimulationPhase.RINGING
 
@@ -149,7 +150,7 @@ class CallService : InCallService() {
             putExtra(TelecomConstants.EXTRA_IS_DIALING, state == Call.STATE_DIALING || state == Call.STATE_CONNECTING || (isSimulated && isDialingPhase))
             putExtra(TelecomConstants.EXTRA_IS_SIMULATED, isSimulated)
             
-            val startTimeValue = callInfo?.answerTime ?: 0L
+            val startTimeValue = callInfo.answerTime
             if (startTimeValue > 0L) {
                 putExtra(TelecomConstants.EXTRA_START_TIME, startTimeValue)
             } else if (state == Call.STATE_ACTIVE && !isDialingPhase) {

@@ -137,7 +137,7 @@ class SimulatedConnection(
         AudioHeartbeatManager.getInstance(context).connection = null
         AudioHeartbeatManager.getInstance(context).stop()
 
-        CallStateManager.unregisterConnection(connectionId, context)
+        CallStateManager.unregisterConnection(connectionId)
         CallStateManager.clearAudioHandlers(priority = false) 
 
         CoroutineScope(Dispatchers.IO).launch {
@@ -150,6 +150,7 @@ class SimulatedConnection(
         CallStateManager.updateAudioState(isMuted, CallStateManager.isSpeakerOn.value)
     }
 
+    @Suppress("unused", "DEPRECATION")
     @Deprecated("Deprecated in Java")
     override fun onCallAudioStateChanged(state: android.telecom.CallAudioState?) {
         state?.let {
