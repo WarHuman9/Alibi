@@ -22,8 +22,11 @@ data class SystemStatus(
     val isCallLogGranted: Boolean = false,
     val isNotificationsGranted: Boolean = false,
     val isPhonePermissionsGranted: Boolean = false,
+    val isContactsPermissionGranted: Boolean = false,
+    val isCallPermissionGranted: Boolean = false,
     val isRegistryWarmedUp: Boolean = false,
     val isRepairing: Boolean = false,
+    val isLegacyCleanedUp: Boolean = false
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -58,6 +61,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_NUMBERS) == PackageManager.PERMISSION_GRANTED
             } else true
             val isPhoneGranted = hasPhoneState && hasPhoneNumbers
+            
+            val isContactsGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED
+            val isCallPermissionGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED
 
             val isWarmedUp = telecomHelper.isAccountRegistered()
 
@@ -67,6 +73,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     isCallLogGranted = isCallLogGranted,
                     isNotificationsGranted = isNotificationsGranted,
                     isPhonePermissionsGranted = isPhoneGranted,
+                    isContactsPermissionGranted = isContactsGranted,
+                    isCallPermissionGranted = isCallPermissionGranted,
                     isRegistryWarmedUp = isWarmedUp,
                 )
             }
@@ -118,6 +126,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun updateContactsPermissionStatus(isGranted: Boolean) {
+        _systemStatus.update { it.copy(isContactsPermissionGranted = isGranted) }
+    }
+
+    fun updateCallPermissionStatus(isGranted: Boolean) {
+        _systemStatus.update { it.copy(isCallPermissionGranted = isGranted) }
+    }
+
     fun updateCallLogPermissionStatus(isGranted: Boolean) {
         _systemStatus.update { it.copy(isCallLogGranted = isGranted) }
     }
@@ -134,8 +150,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     
     @SuppressLint("MissingPermission")
     fun cleanupLegacy() {
+        if (_systemStatus.value.isLegacyCleanedUp) return
+        
         viewModelScope.launch {
             telecomHelper.cleanupLegacyAccounts()
+            _systemStatus.update { it.copy(isLegacyCleanedUp = true) }
         }
     }
 

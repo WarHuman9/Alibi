@@ -3,6 +3,7 @@ package com.example.alibi.util
 import android.content.Context
 import android.database.ContentObserver
 import android.provider.ContactsContract
+import android.util.Log
 import com.example.alibi.ui.screens.ContactItem
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
@@ -46,24 +47,30 @@ class ContactsHelper(private val context: Context) {
 
     private fun fetchContacts(): List<ContactItem> {
         val list = mutableListOf<ContactItem>()
-        val cursor = context.contentResolver.query(
-            ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
-            arrayOf(
-                ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
-                ContactsContract.CommonDataKinds.Phone.NUMBER
-            ),
-            null,
-            null,
-            ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + " ASC"
-        )
-        cursor?.use {
-            while (it.moveToNext()) {
-                val name = it.getStringSafe(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME) ?: "Unknown"
-                val number = it.getStringSafe(ContactsContract.CommonDataKinds.Phone.NUMBER)
-                if (!number.isNullOrBlank()) {
-                    list.add(ContactItem(name, number))
+        try {
+            val cursor = context.contentResolver.query(
+                ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                arrayOf(
+                    ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+                    ContactsContract.CommonDataKinds.Phone.NUMBER
+                ),
+                null,
+                null,
+                ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + " ASC"
+            )
+            cursor?.use {
+                while (it.moveToNext()) {
+                    val name = it.getStringSafe(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME) ?: "Unknown"
+                    val number = it.getStringSafe(ContactsContract.CommonDataKinds.Phone.NUMBER)
+                    if (!number.isNullOrBlank()) {
+                        list.add(ContactItem(name, number))
+                    }
                 }
             }
+        } catch (e: SecurityException) {
+            Log.e("ContactsHelper", "SecurityException during contacts query - permission likely revoked", e)
+        } catch (e: Exception) {
+            Log.e("ContactsHelper", "Error querying contacts", e)
         }
         return list
     }

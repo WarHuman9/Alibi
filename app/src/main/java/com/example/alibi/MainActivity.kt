@@ -94,31 +94,24 @@ class MainActivity : ComponentActivity() {
         ) { results ->
             val isGranted = results.values.all { it }
             viewModel.updatePhonePermissionsStatus(isGranted)
-            
-            // Final step: Dialer Role
-            if (!RoleHelper.isDialerRoleHeld(context)) {
-                requestDialerRole(context, roleLauncher)
-            }
+        }
+
+        val contactsPermissionLauncher = rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.RequestPermission()
+        ) { isGranted ->
+            viewModel.updateContactsPermissionStatus(isGranted)
         }
 
         val callLogPermissionLauncher = rememberLauncherForActivityResult(
             contract = ActivityResultContracts.RequestPermission()
         ) { isGranted -> 
             viewModel.updateCallLogPermissionStatus(isGranted)
-            // Next step: Phone Permissions
-            val permissions = mutableListOf(Manifest.permission.READ_PHONE_STATE)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                permissions.add(Manifest.permission.READ_PHONE_NUMBERS)
-            }
-            phonePermissionsLauncher.launch(permissions.toTypedArray())
         }
 
         val notificationPermissionLauncher = rememberLauncherForActivityResult(
             contract = ActivityResultContracts.RequestPermission()
         ) { isGranted ->
             viewModel.updateNotificationsPermissionStatus(isGranted)
-            // Next step: Call Log
-            callLogPermissionLauncher.launch(Manifest.permission.READ_CALL_LOG)
         }
 
         val lifecycleOwner = LocalLifecycleOwner.current
@@ -131,7 +124,7 @@ class MainActivity : ComponentActivity() {
         }
 
         // Consolidate permission chain logic while preserving the reverse sequence.
-        LaunchedEffect(lifecycleState) {
+        LaunchedEffect(lifecycleState, status) {
             if (lifecycleState != Lifecycle.State.RESUMED) return@LaunchedEffect
             
             val needsNotifications = Build.VERSION.SDK_INT >= 33 &&
@@ -139,24 +132,47 @@ class MainActivity : ComponentActivity() {
             
             val needsCallLog = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALL_LOG) != PackageManager.PERMISSION_GRANTED
             
+            val needsContacts = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED
+
             val needsPhoneState = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED
             val needsPhoneNumbers = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
                     ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_NUMBERS) != PackageManager.PERMISSION_GRANTED
             
             val needsDialerRole = !RoleHelper.isDialerRoleHeld(context)
 
+            Log.d("Alibi_Onboarding", "Step Check - Notifications: $needsNotifications, CallLog: $needsCallLog, Contacts: $needsContacts, Phone: ${needsPhoneState || needsPhoneNumbers}, Role: $needsDialerRole")
+
             when {
-                needsNotifications -> notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                needsCallLog -> callLogPermissionLauncher.launch(Manifest.permission.READ_CALL_LOG)
+                needsNotifications -> {
+                    Log.d("Alibi_Onboarding", "Launching Notifications permission")
+                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
+                needsCallLog -> {
+                    Log.d("Alibi_Onboarding", "Launching Call Log permission")
+                    callLogPermissionLauncher.launch(Manifest.permission.READ_CALL_LOG)
+                }
+                needsContacts -> {
+                    Log.d("Alibi_Onboarding", "Launching Contacts permission")
+                    contactsPermissionLauncher.launch(Manifest.permission.READ_CONTACTS)
+                }
                 needsPhoneState || needsPhoneNumbers -> {
+                    Log.d("Alibi_Onboarding", "Launching Phone permissions")
                     val permissions = mutableListOf(Manifest.permission.READ_PHONE_STATE)
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                         permissions.add(Manifest.permission.READ_PHONE_NUMBERS)
                     }
                     phonePermissionsLauncher.launch(permissions.toTypedArray())
                 }
-                needsDialerRole -> requestDialerRole(context, roleLauncher)
-                else -> viewModel.cleanupLegacy()
+                needsDialerRole -> {
+                    Log.d("Alibi_Onboarding", "Requesting Dialer Role")
+                    requestDialerRole(context, roleLauncher)
+                }
+                else -> {
+                    if (!status.isLegacyCleanedUp) {
+                        Log.d("Alibi_Onboarding", "Onboarding complete. Cleaning up legacy.")
+                        viewModel.cleanupLegacy()
+                    }
+                }
             }
         }
 

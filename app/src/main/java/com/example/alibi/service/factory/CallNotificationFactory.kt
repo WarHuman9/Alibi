@@ -10,7 +10,6 @@ import com.example.alibi.MainActivity
 import com.example.alibi.receiver.CallActionReceiver
 import com.example.alibi.telecom.TelecomConstants
 
-@Suppress("unused")
 class CallNotificationFactory(private val context: Context) {
 
     fun createNotification(
@@ -23,12 +22,13 @@ class CallNotificationFactory(private val context: Context) {
         startTime: Long,
         channelId: String,
         callId: String,
+        isPrimary: Boolean = true,
     ): Notification {
-        val pendingIntent = createContentIntent()
+        val pendingIntent = createContentIntent(callId)
         
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             buildModernNotification(
-                phoneNumber, name, isIncoming, isMissed, isDialing, isSimulated, startTime, channelId, pendingIntent, callId
+                phoneNumber, name, isIncoming, isMissed, isDialing, isSimulated, startTime, channelId, pendingIntent, callId, isPrimary
             )
         } else {
             buildLegacyNotification(
@@ -37,22 +37,26 @@ class CallNotificationFactory(private val context: Context) {
         }
     }
 
-    private fun createContentIntent(): PendingIntent {
+    private fun createContentIntent(callId: String): PendingIntent {
         val intent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
+        val requestCode = callId.hashCode() + TelecomConstants.REQUEST_CODE_CONTENT
         return PendingIntent.getActivity(
             context, 
-            0, 
+            requestCode, 
             intent, 
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
     }
 
-    private fun createActionIntent(action: String, requestCode: Int, callId: String): PendingIntent {
+    private fun createActionIntent(action: String, requestCodeOffset: Int, callId: String): PendingIntent {
+        val baseRequestCode = callId.hashCode()
+        val finalRequestCode = baseRequestCode + requestCodeOffset
+        
         return PendingIntent.getBroadcast(
             context, 
-            requestCode, 
+            finalRequestCode, 
             Intent(context, CallActionReceiver::class.java).apply { 
                 this.action = action 
                 putExtra(TelecomConstants.EXTRA_CALL_ID, callId)
@@ -68,19 +72,20 @@ class CallNotificationFactory(private val context: Context) {
         isIncoming: Boolean,
         isMissed: Boolean,
         isDialing: Boolean,
-        isSimulated: Boolean,
+        @Suppress("UNUSED_PARAMETER") isSimulated: Boolean,
         startTime: Long,
         channelId: String,
         pendingIntent: PendingIntent,
-        callId: String
+        callId: String,
+        isPrimary: Boolean
     ): Notification {
         val person = Person.Builder()
             .setName(name)
             .setImportant(true)
             .build()
 
-        val hangupIntent = createActionIntent(TelecomConstants.ACTION_HANGUP, 1, callId)
-        val answerIntent = createActionIntent(TelecomConstants.ACTION_ANSWER, 2, callId)
+        val hangupIntent = createActionIntent(TelecomConstants.ACTION_HANGUP, TelecomConstants.REQUEST_CODE_HANGUP, callId)
+        val answerIntent = createActionIntent(TelecomConstants.ACTION_ANSWER, TelecomConstants.REQUEST_CODE_ANSWER, callId)
 
         val builder = Notification.Builder(context, channelId)
             .setSmallIcon(android.R.drawable.ic_menu_call)
@@ -102,20 +107,41 @@ class CallNotificationFactory(private val context: Context) {
         val isActive = !isIncoming && !isMissed && !isDialing
         val isConnecting = isDialing && !isMissed
 
-        if (isRinging && !isSimulated && canUseFullScreenIntent()) {
+        // CallStyle is only allowed for the primary foreground notification on Android 14+.
+        // For non-primary calls, we use a standard notification with action buttons.
+        val useCallStyle = isPrimary && (isRinging || isActive)
+
+        if (useCallStyle && canUseFullScreenIntent()) {
             builder.setFullScreenIntent(pendingIntent, true)
         }
 
         when {
-            isRinging -> {
+            useCallStyle && isRinging -> {
                 builder.style = Notification.CallStyle.forIncomingCall(person, hangupIntent, answerIntent)
             }
-            isActive -> {
+            useCallStyle -> { // Primary Active
                 val finalStartTime = if (startTime > 0L) startTime else System.currentTimeMillis()
                 builder.setWhen(finalStartTime)
                 builder.setUsesChronometer(true)
                 builder.setShowWhen(true)
                 builder.style = Notification.CallStyle.forOngoingCall(person, hangupIntent)
+            }
+            isRinging -> { // Secondary ringing
+                builder.addAction(Notification.Action.Builder(
+                    AndroidIcon.createWithResource(context, android.R.drawable.ic_menu_call),
+                    "Answer", answerIntent).build())
+                builder.addAction(Notification.Action.Builder(
+                    AndroidIcon.createWithResource(context, android.R.drawable.ic_menu_close_clear_cancel),
+                    "Hangup", hangupIntent).build())
+            }
+            isActive -> { // Secondary active/hold
+                val finalStartTime = if (startTime > 0L) startTime else System.currentTimeMillis()
+                builder.setWhen(finalStartTime)
+                builder.setUsesChronometer(true)
+                builder.setShowWhen(true)
+                builder.addAction(Notification.Action.Builder(
+                    AndroidIcon.createWithResource(context, android.R.drawable.ic_menu_close_clear_cancel),
+                    "Hangup", hangupIntent).build())
             }
             isConnecting -> {
                 builder.setShowWhen(false)
@@ -151,8 +177,8 @@ class CallNotificationFactory(private val context: Context) {
         pendingIntent: PendingIntent,
         callId: String
     ): Notification {
-        val hangupIntent = createActionIntent(TelecomConstants.ACTION_HANGUP, 1, callId)
-        val answerIntent = createActionIntent(TelecomConstants.ACTION_ANSWER, 2, callId)
+        val hangupIntent = createActionIntent(TelecomConstants.ACTION_HANGUP, TelecomConstants.REQUEST_CODE_HANGUP, callId)
+        val answerIntent = createActionIntent(TelecomConstants.ACTION_ANSWER, TelecomConstants.REQUEST_CODE_ANSWER, callId)
 
         return NotificationCompat.Builder(context, channelId)
             .setSmallIcon(android.R.drawable.ic_menu_call)

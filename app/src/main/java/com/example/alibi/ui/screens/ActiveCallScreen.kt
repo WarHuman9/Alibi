@@ -104,8 +104,8 @@ fun ActiveCallScreen(
         floatingActionButton = {
             CallActionButtons(
                 callState = callState,
-                onAnswer = { CallStateManager.answer() },
-                onHangup = { CallStateManager.disconnect() }
+                onAnswer = { CallStateManager.answer(callId) },
+                onHangup = { CallStateManager.disconnect(callId) }
             )
         },
         floatingActionButtonPosition = FabPosition.Center

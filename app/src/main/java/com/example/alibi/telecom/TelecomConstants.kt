@@ -29,6 +29,11 @@ object TelecomConstants {
     const val ACTION_STOP_SERVICE = "com.example.alibi.action.STOP_NOTIFICATION_SERVICE"
     const val ACTION_HANGUP = "com.example.alibi.ACTION_HANGUP"
     const val ACTION_ANSWER = "com.example.alibi.ACTION_ANSWER"
+
+    // Action Identifiers for unique PendingIntents
+    const val REQUEST_CODE_ANSWER = 1000
+    const val REQUEST_CODE_HANGUP = 2000
+    const val REQUEST_CODE_CONTENT = 3000
     
     // Internal Phone Account ID - Keep this stable to prevent system cache issues.
     const val SIMULATED_ACCOUNT_ID = "AlibiSimulatedAccount_Stable"

@@ -207,10 +207,12 @@ fun DialerScreen(
             enter = expandVertically() + fadeIn(),
             exit = shrinkVertically() + fadeOut()
         ) {
+            val isCallEnabled = phoneNumber.filter { it.isDigit() }.length == 10
             DialPad(
                 phoneNumber = phoneNumber,
                 selectedSim = selectedSim,
                 availableSims = simAccounts,
+                isCallEnabled = isCallEnabled,
                 onDigitClick = { phoneNumber += it },
                 onBackspace = { if (phoneNumber.isNotEmpty()) phoneNumber = phoneNumber.dropLast(1) },
                 onSimSelected = { 
@@ -218,7 +220,7 @@ fun DialerScreen(
                     telecomHelper.setPreferredSimId(it.handle.id)
                 },
                 onCallClick = { 
-                    if (phoneNumber.isNotEmpty() && !isBusy) {
+                    if (isCallEnabled && !isBusy) {
                         if (!systemStatus.isPhonePermissionsGranted) {
                             Toast.makeText(context, "Phone permission required", Toast.LENGTH_LONG).show()
                             (context as? MainActivity)?.triggerRepair()
@@ -235,7 +237,7 @@ fun DialerScreen(
                                 
                                 try {
                                     @SuppressLint("MissingPermission")
-                                    telecomHelper.placeRealCall(phoneNumber, selectedSim?.handle)
+                                    telecomHelper.placeRealCall(phoneNumber, selectedSim?.handle, callId)
                                 } catch (e: SecurityException) {
                                     Log.e("DialerScreen", "SecurityException: Phone permission revoked mid-dial", e)
                                     Toast.makeText(context, "Error: Permission revoked", Toast.LENGTH_SHORT).show()
@@ -397,7 +399,7 @@ private fun formatDuration(seconds: Long): String {
 }
 
 @Composable
-fun DialPad(phoneNumber: String, selectedSim: TelecomHelper.SimAccount?, availableSims: List<TelecomHelper.SimAccount>, onDigitClick: (String) -> Unit, onBackspace: () -> Unit, onSimSelected: (TelecomHelper.SimAccount) -> Unit, onCallClick: () -> Unit) {
+fun DialPad(phoneNumber: String, selectedSim: TelecomHelper.SimAccount?, availableSims: List<TelecomHelper.SimAccount>, isCallEnabled: Boolean, onDigitClick: (String) -> Unit, onBackspace: () -> Unit, onSimSelected: (TelecomHelper.SimAccount) -> Unit, onCallClick: () -> Unit) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp),
@@ -418,6 +420,7 @@ fun DialPad(phoneNumber: String, selectedSim: TelecomHelper.SimAccount?, availab
             DialPadActions(
                 availableSims = availableSims,
                 selectedSim = selectedSim,
+                isCallEnabled = isCallEnabled,
                 onSimSelected = onSimSelected,
                 onCallClick = onCallClick
             )
@@ -438,7 +441,7 @@ private fun NumberDisplay(phoneNumber: String, onBackspace: () -> Unit) {
 }
 
 @Composable
-private fun DialPadActions(availableSims: List<TelecomHelper.SimAccount>, selectedSim: TelecomHelper.SimAccount?, onSimSelected: (TelecomHelper.SimAccount) -> Unit, onCallClick: () -> Unit) {
+private fun DialPadActions(availableSims: List<TelecomHelper.SimAccount>, selectedSim: TelecomHelper.SimAccount?, isCallEnabled: Boolean, onSimSelected: (TelecomHelper.SimAccount) -> Unit, onCallClick: () -> Unit) {
     var showSimMenu by remember { mutableStateOf(false) }
 
     Row(modifier = Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
@@ -457,9 +460,13 @@ private fun DialPadActions(availableSims: List<TelecomHelper.SimAccount>, select
 
         Button(
             onClick = onCallClick,
+            enabled = isCallEnabled,
             modifier = Modifier.size(56.dp),
             shape = CircleShape,
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50)),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = Color(0xFF4CAF50),
+                disabledContainerColor = Color(0xFF4CAF50).copy(alpha = 0.3f)
+            ),
             contentPadding = PaddingValues(0.dp)
         ) { Icon(Icons.Rounded.Call, contentDescription = null, tint = Color.White, modifier = Modifier.size(28.dp)) }
 

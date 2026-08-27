@@ -92,17 +92,17 @@ class CallService : InCallService() {
 
     override fun onCallRemoved(call: Call) {
         super.onCallRemoved(call)
+        val now = System.currentTimeMillis()
         val callHash = call.hashCode()
         if (!registeredCallIds.remove(callHash)) {
-            Log.d("Alibi_CallService", "onCallRemoved: Call $callHash already removed or not found. Skipping redundant cleanup.")
+            Log.d("Alibi_CallService", "[$now] onCallRemoved: Call $callHash already removed. Skipping.")
             return 
         }
-        Log.d("Alibi_CallService", "onCallRemoved: hash=$callHash")
         
-        val callId = call.getAlibiId()
+        val callId = CallStateManager.getCallId(call) ?: call.getAlibiId()
+        Log.d("Alibi_CallService", "[$now] onCallRemoved: system signal for $callId (hash=$callHash)")
         
         uiManager.clearUiState(callId)
-        Log.d("Alibi_CallService", "onCallRemoved: Removing call $callId immediately.")
         
         // Task 14: Immediate removal from manager map to prevent UI deadlock
         CallStateManager.removeCall(callId)
@@ -128,33 +128,32 @@ class CallService : InCallService() {
     }
 
     private fun updateNotification(call: Call, isSimulated: Boolean) {
+        val details = call.details
         val state = if (Build.VERSION.SDK_INT >= 31) {
-            call.details.state
+            details.state
         } else {
             @Suppress("DEPRECATION")
             call.state
         }
         
         val id = call.getAlibiId()
-        val callInfo = CallStateManager.activeCalls.value[id] ?: return
-        val phase = callInfo.phase
-        val isDialingPhase = phase == com.example.alibi.telecom.SimulationPhase.DIALING || 
-                           phase == com.example.alibi.telecom.SimulationPhase.RINGING
-
+        
+        // Fast Metadata Extraction: Extract directly from Call object to avoid race conditions with StateFlow.
+        val phoneNumber = details.handle?.schemeSpecificPart ?: "Unknown"
+        val name = details.callerDisplayName ?: phoneNumber
+        
         val intent = Intent(this, CallNotificationService::class.java).apply {
             putExtra(TelecomConstants.EXTRA_CALL_ID, id)
-            putExtra(TelecomConstants.EXTRA_PHONE_NUMBER, call.details.handle?.schemeSpecificPart)
-            val name = call.details.callerDisplayName ?: call.details.handle?.schemeSpecificPart ?: "Unknown"
+            putExtra(TelecomConstants.EXTRA_PHONE_NUMBER, phoneNumber)
             putExtra(TelecomConstants.EXTRA_NAME, name)
-            putExtra(TelecomConstants.EXTRA_IS_INCOMING, state == Call.STATE_RINGING || (isSimulated && phase == com.example.alibi.telecom.SimulationPhase.RINGING))
-            putExtra(TelecomConstants.EXTRA_IS_DIALING, state == Call.STATE_DIALING || state == Call.STATE_CONNECTING || (isSimulated && isDialingPhase))
+            putExtra(TelecomConstants.EXTRA_IS_INCOMING, state == Call.STATE_RINGING)
+            putExtra(TelecomConstants.EXTRA_IS_DIALING, state == Call.STATE_DIALING || state == Call.STATE_CONNECTING)
             putExtra(TelecomConstants.EXTRA_IS_SIMULATED, isSimulated)
             
-            val startTimeValue = callInfo.answerTime
-            if (startTimeValue > 0L) {
-                putExtra(TelecomConstants.EXTRA_START_TIME, startTimeValue)
-            } else if (state == Call.STATE_ACTIVE && !isDialingPhase) {
-                 putExtra(TelecomConstants.EXTRA_START_TIME, System.currentTimeMillis())
+            // For real calls, we use the system's connect time if active.
+            val connectTime = if (state == Call.STATE_ACTIVE) details.connectTimeMillis else 0L
+            if (connectTime > 0L) {
+                putExtra(TelecomConstants.EXTRA_START_TIME, connectTime)
             }
         }
         ContextCompat.startForegroundService(this, intent)

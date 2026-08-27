@@ -120,14 +120,15 @@ object CallStateManager {
         .stateIn(scope, SharingStarted.Eagerly, false)
 
     val isBusy: StateFlow<Boolean> = _state
-        .map { it.activeCalls.isNotEmpty() }
+        .map { s -> s.activeCalls.values.any { it.state != Call.STATE_DISCONNECTED && it.state != Call.STATE_DISCONNECTING } }
         .stateIn(scope, SharingStarted.Eagerly, false)
 
     val busyMessage: StateFlow<String?> = _state
         .map { s ->
+            val active = s.activeCalls.values.filter { it.state != Call.STATE_DISCONNECTED && it.state != Call.STATE_DISCONNECTING }
             when {
-                s.activeCalls.values.any { it.isRealCall } -> "A real call is currently happening. Try again later."
-                s.activeCalls.values.any { it.isSimulated } -> "There is already an ongoing Simulated call. Try again later."
+                active.any { it.isRealCall } -> "A real call is currently happening. Try again later."
+                active.any { it.isSimulated } -> "There is already an ongoing Simulated call. Try again later."
                 else -> null
             }
         }
@@ -261,6 +262,7 @@ object CallStateManager {
     }
 
     fun addCall(id: String, info: CallMetadata) {
+        Log.d(TAG, "addCall: id=$id, isSimulated=${info.isSimulated}, state=${info.state}")
         _state.update { s ->
             val existing = s.activeCalls[id]
             val updatedInfo = existing?.copy(
@@ -280,6 +282,7 @@ object CallStateManager {
     }
 
     fun rekeyCall(oldId: String, newId: String) {
+        Log.d(TAG, "rekeyCall: $oldId -> $newId")
         _state.update { s ->
             val info = s.activeCalls[oldId] ?: return@update s
             val newActiveCalls = s.activeCalls.toMutableMap()
@@ -300,10 +303,29 @@ object CallStateManager {
     }
 
     fun removeCall(id: String) {
+        val now = System.currentTimeMillis()
+        Log.d(TAG, "[$now] removeCall: id=$id")
         _state.update { s ->
-            if (!s.activeCalls.containsKey(id)) return@update s
+            val info = s.activeCalls[id]
+            if (info == null) {
+                Log.w(TAG, "removeCall: ID $id not found. Current IDs: ${s.activeCalls.keys}")
+                return@update s
+            }
+
             val newActiveCalls = s.activeCalls.toMutableMap()
             newActiveCalls.remove(id)
+            
+            // CONTINUITY FIX: If we just removed a system call, also clear any lingering "REAL_" optimistic 
+            // placeholders for the same number to ensure the UI and "Busy" state reset instantly.
+            if (!id.startsWith("REAL_") && info.isRealCall) {
+                val staleOptimisticId = newActiveCalls.entries.find { 
+                    it.key.startsWith("REAL_") && it.value.number == info.number 
+                }?.key
+                if (staleOptimisticId != null) {
+                    Log.d(TAG, "removeCall: Also clearing stale optimistic entry $staleOptimisticId")
+                    newActiveCalls.remove(staleOptimisticId)
+                }
+            }
             
             val newPendingMetadata = s.pendingMetadata.toMutableMap()
             newPendingMetadata.remove(id)
@@ -316,11 +338,17 @@ object CallStateManager {
         }
     }
 
+    fun getCallId(call: Call): String? {
+        return _state.value.activeCalls.entries.find { it.value.call == call }?.key
+    }
+
     /**
      * Atomically captures call metadata for logging and removes it from the active registry.
      * Task 21: Atomic Logging Synchronization.
      */
     fun completeCall(id: String): CallLogSnapshot? {
+        val now = System.currentTimeMillis()
+        Log.d(TAG, "[$now] completeCall: id=$id")
         val info = _state.value.activeCalls[id] ?: return null
         val snapshot = CallLogSnapshot(
             number = info.number,
@@ -337,6 +365,8 @@ object CallStateManager {
     }
 
     fun clearAllCalls() {
+        val activeIds = _state.value.activeCalls.keys
+        activeIds.forEach { disconnect(it) }
         _state.value = CallManagerState()
     }
 
@@ -349,9 +379,29 @@ object CallStateManager {
             @Suppress("DEPRECATION")
             call.state
         }
+
+        if (state == Call.STATE_DISCONNECTED) {
+            Log.d(TAG, "onCallAdded: Call $id already disconnected. Aborting.")
+            removeCall(id)
+            return
+        }
         
         val isSimulatedCall = isSimulated ?: (call.details.extras?.containsKey(TelecomConstants.EXTRA_ALIBI_CALL_ID) == true)
         val isRealCall = !isSimulatedCall
+
+        // BUG FIX: Merge optimistic real call (REAL_UUID) with system call
+        if (isRealCall) {
+            val handle = call.details.handle?.schemeSpecificPart
+            if (handle != null) {
+                val optimisticId = _state.value.activeCalls.entries.find { 
+                    it.value.isRealCall && it.value.number == handle && it.key.startsWith("REAL_")
+                }?.key
+                if (optimisticId != null && optimisticId != id) {
+                    Log.d(TAG, "onCallAdded: Merging optimistic real call $optimisticId into system call $id")
+                    rekeyCall(optimisticId, id)
+                }
+            }
+        }
     
         if (isRealCall && isSimulatedCallActive.value) {
             _state.value.activeCalls.filterValues { it.isSimulated }.forEach { (callId, _) ->
@@ -529,21 +579,39 @@ object CallStateManager {
 
     fun answer(id: String? = null) {
         val targetId = id ?: _state.value.currentCallId ?: return
-        val callInfo = _state.value.activeCalls[targetId] ?: _state.value.activeCalls.values.find { it.state == Call.STATE_RINGING }
-        if (callInfo?.isSimulated == true) {
-            _actions.tryEmit(callInfo.id to CallAction.ANSWER)
+        val callInfo = _state.value.activeCalls[targetId]
+        
+        // Bug 37: If an explicit ID was provided but isn't in activeCalls, return without acting.
+        if (id != null && callInfo == null) {
+            Log.w(TAG, "answer: Explicit ID $id not found in active calls. Ignoring.")
+            return
+        }
+
+        val finalCallInfo = callInfo ?: _state.value.activeCalls.values.find { it.state == Call.STATE_RINGING }
+        
+        if (finalCallInfo?.isSimulated == true) {
+            _actions.tryEmit(finalCallInfo.id to CallAction.ANSWER)
         } else {
-            callInfo?.call?.answer(0)
+            finalCallInfo?.call?.answer(0)
         }
     }
 
     fun disconnect(id: String? = null) {
         val targetId = id ?: _state.value.currentCallId ?: return
-        val callInfo = _state.value.activeCalls[targetId] ?: _state.value.activeCalls.values.lastOrNull()
-        if (callInfo?.isSimulated == true) {
-            _actions.tryEmit(callInfo.id to CallAction.HANGUP)
+        val callInfo = _state.value.activeCalls[targetId]
+        
+        // Bug 37: If an explicit ID was provided but isn't in activeCalls, return without acting.
+        if (id != null && callInfo == null) {
+            Log.w(TAG, "disconnect: Explicit ID $id not found in active calls. Ignoring.")
+            return
+        }
+
+        val finalCallInfo = callInfo ?: _state.value.activeCalls.values.lastOrNull()
+        
+        if (finalCallInfo?.isSimulated == true) {
+            _actions.tryEmit(finalCallInfo.id to CallAction.HANGUP)
         } else {
-            callInfo?.call?.disconnect()
+            finalCallInfo?.call?.disconnect()
         }
     }
 

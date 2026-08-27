@@ -34,7 +34,7 @@ fun ContactsScreen(
     val contactsHelper = remember { ContactsHelper(context) }
     val systemStatus = MainActivity.LocalSystemStatus.current
     
-    val hasPermission = systemStatus.isPhonePermissionsGranted
+    val hasPermission = systemStatus.isContactsPermissionGranted
 
     val contacts by if (hasPermission) {
         contactsHelper.getContactsFlow().collectAsStateWithLifecycle(initialValue = null)

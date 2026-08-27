@@ -279,7 +279,7 @@ fun SetupScreen(onNavigateToCall: (String) -> Unit) {
                         if (callDirection == CallLog.Calls.OUTGOING_TYPE) {
                             telecomHelper.startOutgoingCall(phoneNumber, autoAnswerDelay.toIntOrNull() ?: 0, customTime, duration, selectedSim?.handle, featureFlags)
                         } else {
-                            telecomHelper.startIncomingCall(phoneNumber, callDirection, autoAnswerDelay.toIntOrNull() ?: 0, customTime, duration, selectedSim?.handle, featureFlags)
+                            telecomHelper.startIncomingCall(phoneNumber, callDirection, customTime, duration, selectedSim?.handle, featureFlags)
                         }
                     }
                     onNavigateToCall(phoneNumber)

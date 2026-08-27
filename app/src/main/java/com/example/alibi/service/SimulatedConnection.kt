@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.telecom.Call
 import android.telecom.Connection
 import android.telecom.DisconnectCause
@@ -30,12 +31,24 @@ class SimulatedConnection(
     val connectionId = request.alibiId
     private val connectionScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private val isDestroyed = AtomicBoolean(false)
+    private var wakeLock: PowerManager.WakeLock? = null
 
     // Captured metadata for atomic logging
     internal var localAnswerTime: Long = 0L
 
     init {
         Log.d(TAG, "Initializing SimulatedConnection: $connectionId")
+        
+        // Reliability Enhancement: Acquire WakeLock to prevent CPU sleep during call
+        try {
+            val powerManager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+            wakeLock = powerManager?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Alibi:SimulatedCall:$connectionId")
+            wakeLock?.acquire(10 * 60 * 60 * 1000L /* 10 hours max safety timeout */)
+            Log.d(TAG, "WakeLock acquired for $connectionId")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to acquire WakeLock", e)
+        }
+
         connectionCapabilities = CAPABILITY_SUPPORT_HOLD or CAPABILITY_HOLD
         audioModeIsVoip = true
         
@@ -117,7 +130,8 @@ class SimulatedConnection(
 
     fun terminate(userInitiated: Boolean, cause: Int = DisconnectCause.LOCAL) {
         if (isDestroyed.get()) return
-        Log.d(TAG, "terminate: $connectionId, userInitiated=$userInitiated, cause=$cause")
+        val now = System.currentTimeMillis()
+        Log.d(TAG, "[$now] terminate: $connectionId, userInitiated=$userInitiated")
         
         // Task 20: Trigger logging BEFORE any state removal or cleanup
         SimulationController.triggerLogging(connectionId, userInitiated)
@@ -130,7 +144,8 @@ class SimulatedConnection(
     private fun cleanup(isUserTerminated: Boolean) {
         if (isDestroyed.getAndSet(true)) return
         
-        Log.d(TAG, "Cleanup initiated for connection: $connectionId")
+        val now = System.currentTimeMillis()
+        Log.d(TAG, "[$now] Cleanup initiated for connection: $connectionId")
 
         SimulationController.unregisterConnection(connectionId)
         
@@ -139,6 +154,17 @@ class SimulatedConnection(
 
         CallStateManager.unregisterConnection(connectionId)
         CallStateManager.clearAudioHandlers(priority = false) 
+
+        // Release WakeLock
+        try {
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
+                Log.d(TAG, "WakeLock released for $connectionId")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error releasing WakeLock", e)
+        }
+        wakeLock = null
 
         CoroutineScope(Dispatchers.IO).launch {
             destroy()
