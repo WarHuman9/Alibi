@@ -10,11 +10,13 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.alibi.telecom.TelecomHelper
 import com.example.alibi.util.RoleHelper
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.time.Duration.Companion.seconds
 
 data class SystemStatus(
@@ -50,25 +52,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     @SuppressLint("MissingPermission")
     fun refreshStatus() {
         viewModelScope.launch {
-            val isRoleHeld = RoleHelper.isDialerRoleHeld(context)
-            val isCallLogGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALL_LOG) == PackageManager.PERMISSION_GRANTED
-            val isNotificationsGranted = if (Build.VERSION.SDK_INT >= 33) {
-                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
-            } else true
-            
-            val hasPhoneState = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED
-            val hasPhoneNumbers = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_NUMBERS) == PackageManager.PERMISSION_GRANTED
-            } else true
-            val isPhoneGranted = hasPhoneState && hasPhoneNumbers
-            
-            val isContactsGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED
-            val isCallPermissionGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED
+            val status = withContext(Dispatchers.IO) {
+                val isRoleHeld = RoleHelper.isDialerRoleHeld(context)
+                val isCallLogGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALL_LOG) == PackageManager.PERMISSION_GRANTED
+                val isNotificationsGranted = if (Build.VERSION.SDK_INT >= 33) {
+                    ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+                } else true
+                
+                val hasPhoneState = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED
+                val hasPhoneNumbers = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_NUMBERS) == PackageManager.PERMISSION_GRANTED
+                } else true
+                val isPhoneGranted = hasPhoneState && hasPhoneNumbers
+                
+                val isContactsGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED
+                val isCallPermissionGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED
 
-            val isWarmedUp = telecomHelper.isAccountRegistered()
-
-            _systemStatus.update {
-                it.copy(
+                val isWarmedUp = telecomHelper.isAccountRegistered()
+                
+                SystemStatus(
                     isDialerRoleHeld = isRoleHeld,
                     isCallLogGranted = isCallLogGranted,
                     isNotificationsGranted = isNotificationsGranted,
@@ -79,7 +81,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
 
-            if (isRoleHeld) {
+            _systemStatus.update { status }
+
+            if (status.isDialerRoleHeld) {
                 telecomHelper.cleanupLegacyAccounts()
             }
         }

@@ -13,6 +13,7 @@ import com.example.alibi.service.factory.CallNotificationFactory
 import com.example.alibi.telecom.CallStateManager
 import com.example.alibi.telecom.TelecomConstants
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -58,83 +59,90 @@ class CallNotificationService : Service() {
 
     private fun observeCallState() {
         serviceScope.launch {
-            CallStateManager.state.collect { state ->
-                val calls = state.activeCalls
-                Log.d(TelecomConstants.NOTIFICATION_TAG, "[${System.currentTimeMillis()}] observeCallState: Active calls update received. Count=${calls.size}")
-                
-                if (calls.isEmpty()) {
-                    val now = System.currentTimeMillis()
-                    Log.d(TelecomConstants.NOTIFICATION_TAG, "[$now] observeCallState: No active calls. Starting total cleanup.")
-                    startDelayedStopCheck()
+            CallStateManager.state
+                .map { it.activeCalls }
+                .distinctUntilChanged()
+                .flowOn(Dispatchers.Default)
+                .collect { calls ->
+                    Log.d(TelecomConstants.NOTIFICATION_TAG, "[${System.currentTimeMillis()}] observeCallState: Active calls update received. Count=${calls.size}")
                     
-                    // Task 17: Cancel all lingering notifications if any
-                    val idsToCancel = notificationMutex.withLock { activeNotificationIds.keys.toList() }
-                    Log.d(TelecomConstants.NOTIFICATION_TAG, "[$now] observeCallState: Cancelling ${idsToCancel.size} notifications")
-                    idsToCancel.forEach { cancelNotification(it) }
-                    
-                    // Master Clear: Ensure no stale state prevents future notifications
-                    lastNotificationStates.clear()
-                    debounceJobs.values.forEach { it.cancel() }
-                    debounceJobs.clear()
-                    
-                    return@collect
-                }
-                
-                cancelDelayedStop()
-                
-                val anySimulated = calls.values.any { it.isSimulated }
-                if (!anySimulated) {
-                    audioHeartbeatManager.stop()
-                }
-
-                // Task 17: Support Multi-Call updates near-instantly
-                calls.forEach { (id, it) ->
-                    val newState = NotificationState(
-                        id = it.id,
-                        phoneNumber = it.number,
-                        name = it.name,
-                        isIncoming = it.phase == com.example.alibi.telecom.SimulationPhase.RINGING,
-                        isMissed = it.type == android.provider.CallLog.Calls.MISSED_TYPE,
-                        isDialing = it.phase == com.example.alibi.telecom.SimulationPhase.DIALING,
-                        isSimulated = it.isSimulated,
-                        startTime = it.answerTime
-                    )
-
-                    if (newState == lastNotificationStates[id]) {
-                        return@forEach
+                    if (calls.isEmpty()) {
+                        val now = System.currentTimeMillis()
+                        Log.d(TelecomConstants.NOTIFICATION_TAG, "[$now] observeCallState: No active calls. Starting total cleanup.")
+                        withContext(Dispatchers.Main) {
+                            startDelayedStopCheck()
+                        }
+                        
+                        // Task 17: Cancel all lingering notifications if any
+                        val idsToCancel = notificationMutex.withLock { activeNotificationIds.keys.toList() }
+                        Log.d(TelecomConstants.NOTIFICATION_TAG, "[$now] observeCallState: Cancelling ${idsToCancel.size} notifications")
+                        idsToCancel.forEach { cancelNotification(it) }
+                        
+                        // Master Clear: Ensure no stale state prevents future notifications
+                        lastNotificationStates.clear()
+                        debounceJobs.values.forEach { it.cancel() }
+                        debounceJobs.clear()
+                        
+                        return@collect
                     }
                     
-                    val oldState = lastNotificationStates[id]
-                    val isSignificantChange = oldState != null && (
-                        oldState.isIncoming != newState.isIncoming ||
-                        oldState.isDialing != newState.isDialing
-                    )
+                    withContext(Dispatchers.Main) {
+                        cancelDelayedStop()
+                    }
+                    
+                    val anySimulated = calls.values.any { it.isSimulated }
+                    if (!anySimulated) {
+                        audioHeartbeatManager.stop()
+                    }
 
-                    Log.d(TelecomConstants.NOTIFICATION_TAG, "[${System.currentTimeMillis()}] observeCallState: State changed for $id.")
-                    lastNotificationStates[id] = newState
+                    // Task 17: Support Multi-Call updates near-instantly
+                    calls.forEach { (id, it) ->
+                        val newState = NotificationState(
+                            id = it.id,
+                            phoneNumber = it.number,
+                            name = it.name,
+                            isIncoming = it.phase == com.example.alibi.telecom.SimulationPhase.RINGING,
+                            isMissed = it.type == android.provider.CallLog.Calls.MISSED_TYPE,
+                            isDialing = it.phase == com.example.alibi.telecom.SimulationPhase.DIALING,
+                            isSimulated = it.isSimulated,
+                            startTime = it.answerTime
+                        )
 
-                    showNotification(
-                        phoneNumber = it.number,
-                        name = it.name,
-                        isIncoming = newState.isIncoming,
-                        isMissed = newState.isMissed,
-                        isDialing = newState.isDialing,
-                        isSimulated = newState.isSimulated,
-                        startTime = newState.startTime,
-                        callId = it.id,
-                        instant = isSignificantChange
-                    )
-                }
+                        if (newState == lastNotificationStates[id]) {
+                            return@forEach
+                        }
+                        
+                        val oldState = lastNotificationStates[id]
+                        val isSignificantChange = oldState != null && (
+                            oldState.isIncoming != newState.isIncoming ||
+                            oldState.isDialing != newState.isDialing
+                        )
 
-                // Task 17: Clear stale notifications for calls that are gone
-                val staleIds = notificationMutex.withLock { 
-                    activeNotificationIds.keys.filter { !calls.containsKey(it) }
+                        Log.d(TelecomConstants.NOTIFICATION_TAG, "[${System.currentTimeMillis()}] observeCallState: State changed for $id.")
+                        lastNotificationStates[id] = newState
+
+                        showNotification(
+                            phoneNumber = it.number,
+                            name = it.name,
+                            isIncoming = newState.isIncoming,
+                            isMissed = newState.isMissed,
+                            isDialing = newState.isDialing,
+                            isSimulated = newState.isSimulated,
+                            startTime = newState.startTime,
+                            callId = it.id,
+                            instant = isSignificantChange
+                        )
+                    }
+
+                    // Task 17: Clear stale notifications for calls that are gone
+                    val staleIds = notificationMutex.withLock { 
+                        activeNotificationIds.keys.filter { !calls.containsKey(it) }
+                    }
+                    staleIds.forEach { 
+                        Log.d(TelecomConstants.NOTIFICATION_TAG, "[${System.currentTimeMillis()}] observeCallState: Call $it is stale. Cancelling.")
+                        cancelNotification(it) 
+                    }
                 }
-                staleIds.forEach { 
-                    Log.d(TelecomConstants.NOTIFICATION_TAG, "[${System.currentTimeMillis()}] observeCallState: Call $it is stale. Cancelling.")
-                    cancelNotification(it) 
-                }
-            }
         }
     }
 

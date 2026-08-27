@@ -229,6 +229,8 @@ fun AlibiApp() {
         } else {
             // If the map becomes empty OR all calls are DISCONNECTED, return to Setup
             if (backStack.any { it is ActiveCallRoute }) {
+                // Task: Staggered navigation to allow system animations (notifications) to clear first.
+                kotlinx.coroutines.delay(300)
                 Log.d("AlibiApp", "No active calls detected. Clearing backstack to SetupRoute.")
                 // Navigation 3: popUpTo(SetupRoute) { inclusive = true } equivalent:
                 // Clear the backstack and ensure MainTabsRoute (Setup) is the only entry.

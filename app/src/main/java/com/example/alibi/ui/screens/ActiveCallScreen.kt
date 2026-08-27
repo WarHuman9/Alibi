@@ -102,11 +102,13 @@ fun ActiveCallScreen(
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         floatingActionButton = {
-            CallActionButtons(
-                callState = callState,
-                onAnswer = { CallStateManager.answer(callId) },
-                onHangup = { CallStateManager.disconnect(callId) }
-            )
+            if (callState != Call.STATE_DISCONNECTED) {
+                CallActionButtons(
+                    callState = callState,
+                    onAnswer = { CallStateManager.answer(callId) },
+                    onHangup = { CallStateManager.disconnect(callId) }
+                )
+            }
         },
         floatingActionButtonPosition = FabPosition.Center
     ) { innerPadding ->
