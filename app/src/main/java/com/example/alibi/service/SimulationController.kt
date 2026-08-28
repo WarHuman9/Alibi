@@ -25,6 +25,7 @@ object SimulationController {
     private val activeConnections = ConcurrentHashMap<String, SimulatedConnection>()
     private val activeJobs = ConcurrentHashMap<String, ConcurrentHashMap<String, Job>>()
     private val isSimulationAnswered = ConcurrentHashMap<String, AtomicBoolean>()
+    private val pendingActions = ConcurrentHashMap<String, CallAction>()
 
     init {
         controllerScope.launch {
@@ -59,6 +60,13 @@ object SimulationController {
         }
 
         startCloakingWatchdog(id)
+
+        // Execute any actions that were queued during the Optimistic phase
+        when (pendingActions.remove(id)) {
+            CallAction.ANSWER -> answerSimulatedCall(id)
+            CallAction.HANGUP -> disconnectSimulatedCall(id)
+            else -> {}
+        }
     }
 
     /**
@@ -73,7 +81,12 @@ object SimulationController {
     }
 
     fun answerSimulatedCall(id: String) {
-        val connection = activeConnections[id] ?: return
+        val connection = activeConnections[id]
+        if (connection == null) {
+            Log.d(TAG, "answerSimulatedCall: Connection $id not found yet. Queuing answer.")
+            pendingActions[id] = CallAction.ANSWER
+            return
+        }
         val answered = isSimulationAnswered[id] ?: return
 
         Log.d(TAG, "answerSimulatedCall: $id")
@@ -109,7 +122,12 @@ object SimulationController {
     }
 
     fun disconnectSimulatedCall(id: String, userInitiated: Boolean = true) {
-        val connection = activeConnections[id] ?: return
+        val connection = activeConnections[id]
+        if (connection == null) {
+            Log.d(TAG, "disconnectSimulatedCall: Connection $id not found yet. Queuing hangup.")
+            pendingActions[id] = CallAction.HANGUP
+            return
+        }
         Log.d(TAG, "disconnectSimulatedCall: $id (userInitiated=$userInitiated)")
         
         // Use connection.terminate() to ensure consistent cleanup path
@@ -193,7 +211,7 @@ object SimulationController {
      * Task 21: Atomic Logging Synchronization.
      */
     fun triggerLogging(id: String, userInitiated: Boolean) {
-        Log.d(TAG, "triggerLogging: $id (userInitiated=$userInitiated)")
+        Log.d(TAG, "triggerLogging: Triggered for $id (userInitiated=$userInitiated)")
         
         val connection = activeConnections[id]
         val intendedDuration = connection?.request?.duration
@@ -202,11 +220,12 @@ object SimulationController {
         val snapshot = CallStateManager.completeCall(id)
         
         if (snapshot != null && context != null) {
+            Log.d(TAG, "triggerLogging: Snapshot obtained for ${snapshot.number}. Launching recordCallEnd.")
             controllerScope.launch {
                 recordCallEnd(context, snapshot, intendedDuration, userInitiated)
             }
         } else {
-            Log.w(TAG, "triggerLogging: Failed to get snapshot or context for $id")
+            Log.w(TAG, "triggerLogging: Failed to get snapshot or context for $id. snapshot=${snapshot != null}, context=${context != null}")
         }
     }
 
@@ -219,7 +238,7 @@ object SimulationController {
         intendedDuration: Long?,
         isUserTerminated: Boolean
     ) = withContext(Dispatchers.IO + NonCancellable) {
-        Log.d(TAG, "recordCallEnd: Processing log for ${snapshot.number}")
+        Log.d(TAG, "recordCallEnd: Processing log for ${snapshot.number}. answerTime=${snapshot.answerTime}, startTime=${snapshot.startTime}")
 
         var finalType = snapshot.type
         var finalDuration = 0L

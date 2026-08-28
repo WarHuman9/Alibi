@@ -34,22 +34,10 @@ class AudioHeartbeatManager private constructor(context: Context) : AudioManager
         }
 
     init {
-        managerScope.launch {
-            CallStateManager.isRealCall.collect { isReal ->
-                if (isReal) {
-                    Log.d(TAG, "Real call detected. Forcing heartbeat stop.")
-                    stop()
-                }
-            }
-        }
+        // Heartbeat lifecycle is now managed by AudioPolicyManager
     }
 
     fun start() {
-        if (!CallStateManager.isCurrentCallSimulated()) {
-            Log.d(TAG, "Start requested but NO simulated call active. Bypassing heartbeat for system safety.")
-            return
-        }
-        
         if (isPlaying.compareAndSet(false, true)) {
             Log.d(TAG, "Starting Audio Heartbeat...")
             try {

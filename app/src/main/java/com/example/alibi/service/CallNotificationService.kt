@@ -101,9 +101,9 @@ class CallNotificationService : Service() {
                             id = it.id,
                             phoneNumber = it.number,
                             name = it.name,
-                            isIncoming = it.phase == com.example.alibi.telecom.SimulationPhase.RINGING,
+                            isIncoming = if (it.isSimulated) it.phase == com.example.alibi.telecom.SimulationPhase.RINGING else it.state == android.telecom.Call.STATE_RINGING,
                             isMissed = it.type == android.provider.CallLog.Calls.MISSED_TYPE,
-                            isDialing = it.phase == com.example.alibi.telecom.SimulationPhase.DIALING,
+                            isDialing = if (it.isSimulated) it.phase == com.example.alibi.telecom.SimulationPhase.DIALING else (it.state == android.telecom.Call.STATE_DIALING || it.state == android.telecom.Call.STATE_CONNECTING),
                             isSimulated = it.isSimulated,
                             startTime = it.answerTime
                         )

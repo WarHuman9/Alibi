@@ -62,9 +62,6 @@ class SimulatedConnection(
 
         CallStateManager.registerConnection(connectionId, this)
         
-        // Task 22: Atomic Metadata Injection
-        CallStateManager.setSimulatedCallActive(request.copy(alibiId = connectionId))
-
         if (request.direction == android.provider.CallLog.Calls.OUTGOING_TYPE) {
             setDialing()
             AudioHeartbeatManager.getInstance(context).start()
@@ -137,7 +134,6 @@ class SimulatedConnection(
         SimulationController.triggerLogging(connectionId, userInitiated)
         
         setDisconnected(DisconnectCause(cause))
-        CallStateManager.updateCallState(connectionId, Call.STATE_DISCONNECTED)
         cleanup(userInitiated)
     }
 
@@ -150,7 +146,7 @@ class SimulatedConnection(
         SimulationController.unregisterConnection(connectionId)
         
         AudioHeartbeatManager.getInstance(context).connection = null
-        AudioHeartbeatManager.getInstance(context).stop()
+        // Heartbeat is now managed by AudioPolicyManager via CallRepository
 
         CallStateManager.unregisterConnection(connectionId)
         CallStateManager.clearAudioHandlers(priority = false) 

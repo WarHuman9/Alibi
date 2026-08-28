@@ -23,7 +23,8 @@ class CallService : InCallService() {
     private lateinit var backgroundHandler: android.os.Handler
     
     private lateinit var uiManager: CallUiManager
-    private lateinit var audioRouteManager: CallAudioRouteManager
+    private lateinit var audioRouteManager: com.example.alibi.util.CallAudioRouteManager
+    private lateinit var audioPolicyManager: com.example.alibi.telecom.AudioPolicyManager
 
     override fun onCreate() {
         super.onCreate()
@@ -32,16 +33,18 @@ class CallService : InCallService() {
         backgroundHandler = android.os.Handler(backgroundThread.looper)
         
         uiManager = CallUiManager(this)
-        audioRouteManager = CallAudioRouteManager(this)
+        audioRouteManager = com.example.alibi.util.CallAudioRouteManager(this)
+        audioPolicyManager = com.example.alibi.telecom.AudioPolicyManager(this)
         
-        Log.d("Alibi_CallService", "onCreate: Background thread and managers initialized")
+        Log.d("Alibi_CallService", "onCreate: Managers initialized")
     }
 
     override fun onDestroy() {
         super.onDestroy()
         CallStateManager.clearAudioHandlers(priority = true)
+        audioPolicyManager.cleanup()
         backgroundThread.quitSafely()
-        Log.d("Alibi_CallService", "onDestroy: Background thread stopped")
+        Log.d("Alibi_CallService", "onDestroy: Background thread stopped and managers cleaned up")
     }
 
     override fun onCallAdded(call: Call) {
