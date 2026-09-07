@@ -104,7 +104,8 @@ class CallNotificationService : Service() {
                         if (id !in surgicalCallJobs) {
                             surgicalCallJobs[id] = serviceScope.launch {
                                 CallStateManager.getCallMetadata(id).collect { meta ->
-                                    if (meta == null) {
+                                    if (meta == null || meta.state == Call.STATE_DISCONNECTED || meta.state == Call.STATE_DISCONNECTING) {
+                                        Log.d(TelecomConstants.NOTIFICATION_TAG, "observeCallState: Call $id disconnected/disconnecting. Immediate notification cleanup.")
                                         cancelNotification(id)
                                         return@collect
                                     }
@@ -262,14 +263,6 @@ class CallNotificationService : Service() {
         notificationMutex.withLock {
             val startTimeBuild = System.currentTimeMillis()
             
-            // State Check: Ensure call isn't DISCONNECTED before build.
-            // Fast Path: Trust the Intent data unless the State Map explicitly says the call is finished.
-            val info = CallStateManager.activeCalls.value[callId]
-            if (info != null && (info.state == android.telecom.Call.STATE_DISCONNECTED || info.state == android.telecom.Call.STATE_DISCONNECTING)) {
-                Log.d(TelecomConstants.NOTIFICATION_TAG, "performShowNotification: Call $callId explicitly disconnected. Aborting post.")
-                return@withLock
-            }
-
             withContext(Dispatchers.Main) {
                 cancelDelayedStop()
             }
@@ -367,6 +360,29 @@ class CallNotificationService : Service() {
         
         notificationMutex.withLock {
             val now = System.currentTimeMillis()
+
+            // Safeguard #1: Idempotency check to safely handle duplicate/late cancellations
+            val isAlreadyCleared = !activeNotificationIds.containsKey(callId)
+                && !activeNotifications.containsKey(callId)
+                && !lastNotificationStates.containsKey(callId)
+                && foregroundCallId != callId
+
+            if (isAlreadyCleared) {
+                val hasOtherCalls = activeNotificationIds.isNotEmpty() 
+                    || CallRepository.sessions.value.isNotEmpty()
+                    || CallStateManager.activeCalls.value.isNotEmpty()
+
+                if (!hasOtherCalls) {
+                    Log.d(TelecomConstants.NOTIFICATION_TAG, "[$now] performCancelNotification: Call $callId already cleared and no calls remain. Idempotent teardown check.")
+                    notificationManager.cancel(NOTIFICATION_ID)
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    startDelayedStopCheck()
+                } else {
+                    Log.d(TelecomConstants.NOTIFICATION_TAG, "[$now] performCancelNotification: Call $callId already cleared. Idempotent no-op.")
+                }
+                return@withLock
+            }
+
             debounceJobs.remove(callId)?.cancel()
             val id = activeNotificationIds.remove(callId)
             activeNotifications.remove(callId)
