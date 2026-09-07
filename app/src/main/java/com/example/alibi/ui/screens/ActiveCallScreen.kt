@@ -29,10 +29,12 @@ import kotlin.time.Duration.Companion.seconds
 fun ActiveCallScreen(
     callId: String
 ) {
-    val state by CallStateManager.state.collectAsStateWithLifecycle()
+    val callInfo by remember(callId) { 
+        CallStateManager.getCallMetadata(callId) 
+    }.collectAsStateWithLifecycle(initialValue = null)
     
-    val activeCalls = state.activeCalls
-    val callInfo = activeCalls[callId]
+    val isMuted by CallStateManager.isMuted.collectAsStateWithLifecycle()
+    val speakerOn by CallStateManager.isSpeakerOn.collectAsStateWithLifecycle()
     
     if (callInfo == null) {
         // Fallback for when call is removed from state but screen is still transitioning
@@ -42,22 +44,16 @@ fun ActiveCallScreen(
         return
     }
     
-    val callState = callInfo.state
-    val simulationPhase = callInfo.phase
-    val isMuted = state.isMuted
-    val speakerOn = state.isSpeakerOn
-    // Explicitly sync hold state from CallMetadata for better reliability
-    val isHolding = callInfo.isHolding
+    val callState = callInfo!!.state
+    val simulationPhase = callInfo!!.phase
+    val isHolding = callInfo!!.isHolding
     
     LaunchedEffect(callState, simulationPhase) {
-        android.util.Log.d("Alibi_UI", "Screen received state change: callState=$callState, phase=$simulationPhase, isHolding=$isHolding")
+        android.util.Log.d("Alibi_UI", "Screen received state change: callId=$callId, callState=$callState, phase=$simulationPhase, isHolding=$isHolding")
     }
     
-    val displayPhoneNumber = remember(callInfo) {
-        callInfo?.number ?: "Unknown"
-    }
-    
-    val answerTime = callInfo?.answerTime ?: 0L
+    val displayPhoneNumber = callInfo!!.number
+    val answerTime = callInfo!!.answerTime
     var durationSeconds by remember { mutableLongStateOf(0L) }
     
     val windowAdaptiveInfo = currentWindowAdaptiveInfo()

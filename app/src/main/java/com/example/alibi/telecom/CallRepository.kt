@@ -3,6 +3,8 @@ package com.example.alibi.telecom
 import android.util.Log
 import com.example.alibi.telecom.session.CallSession
 import com.example.alibi.telecom.session.OptimisticCallSession
+import kotlinx.collections.immutable.PersistentMap
+import kotlinx.collections.immutable.persistentMapOf
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -16,8 +18,8 @@ object CallRepository {
     private const val TAG = "CallRepository"
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     
-    private val _sessions = MutableStateFlow<Map<String, CallSession>>(emptyMap())
-    val sessions: StateFlow<Map<String, CallSession>> = _sessions.asStateFlow()
+    private val _sessions = MutableStateFlow<PersistentMap<String, CallSession>>(persistentMapOf())
+    val sessions: StateFlow<PersistentMap<String, CallSession>> = _sessions.asStateFlow()
 
     fun addSession(session: CallSession) {
         Log.d(TAG, "addSession: ${session.id}")
@@ -35,9 +37,9 @@ object CallRepository {
 
             if (optimisticId != null) {
                 Log.d(TAG, "Merging optimistic session $optimisticId into new session ${session.id}")
-                current - optimisticId + (session.id to session)
+                current.remove(optimisticId).put(session.id, session)
             } else {
-                current + (session.id to session)
+                current.put(session.id, session)
             }
         }
 
@@ -48,7 +50,7 @@ object CallRepository {
                 _sessions.update { current ->
                     if (current[session.id] === session) {
                         Log.w(TAG, "Optimistic session ${session.id} timed out. Removing.")
-                        current - session.id
+                        current.remove(session.id)
                     } else current
                 }
             }
@@ -57,7 +59,7 @@ object CallRepository {
 
     fun removeSession(id: String) {
         Log.d(TAG, "removeSession: $id")
-        _sessions.update { it - id }
+        _sessions.update { it.remove(id) }
     }
 
     fun getSession(id: String): CallSession? {
@@ -66,6 +68,6 @@ object CallRepository {
 
     fun clear() {
         Log.d(TAG, "clear all sessions")
-        _sessions.value = emptyMap()
+        _sessions.value = persistentMapOf()
     }
 }

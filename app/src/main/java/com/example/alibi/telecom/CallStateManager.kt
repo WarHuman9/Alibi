@@ -1,11 +1,10 @@
 package com.example.alibi.telecom
 
-import android.provider.CallLog
 import android.telecom.Call
 import android.util.Log
-import com.example.alibi.telecom.session.CallSession
 import com.example.alibi.telecom.session.RealCallSession
 import com.example.alibi.util.getAlibiId
+import kotlinx.collections.immutable.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -15,27 +14,59 @@ import kotlinx.coroutines.flow.*
 
 /**
  * Bridge between the new Session architecture and the legacy UI state.
+ * Optimized with Granular Flows and Immutable Collections.
  */
 object CallStateManager {
     private const val TAG = "CallStateManager"
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
-    // Internal state for non-session properties
-    private val _state = MutableStateFlow(CallManagerState())
-    
+    // 1. Primitive Flows (Split from CallManagerState)
+    private val _currentCallId = MutableStateFlow<String?>(null)
+    val currentCallId: StateFlow<String?> = _currentCallId.asStateFlow()
+
+    private val _isMuted = MutableStateFlow(false)
+    val isMuted: StateFlow<Boolean> = _isMuted.asStateFlow()
+
+    private val _isSpeakerOn = MutableStateFlow(false)
+    val isSpeakerOn: StateFlow<Boolean> = _isSpeakerOn.asStateFlow()
+
+    // 2. Structural Flows (Derived from Repository)
     @OptIn(ExperimentalCoroutinesApi::class)
-    val state: StateFlow<CallManagerState> = CallRepository.sessions
+    val activeCalls: StateFlow<PersistentMap<String, CallMetadata>> = CallRepository.sessions
         .flatMapLatest { sessions ->
-            if (sessions.isEmpty()) flowOf(emptyMap<String, CallMetadata>())
-            else combine(sessions.values.map { it.metadata }) { it.associateBy { it.id } }
+            if (sessions.isEmpty()) flowOf(persistentMapOf<String, CallMetadata>())
+            else combine(sessions.values.map { it.metadata }) { it.associateBy { it.id }.toPersistentMap() }
         }
-        .combine(_state) { activeCalls, internal ->
-            internal.copy(
-                activeCalls = activeCalls,
-                isHolding = activeCalls.values.any { it.isHolding }
-            )
-        }
-        .stateIn(scope, SharingStarted.Eagerly, CallManagerState())
+        .stateIn(scope, SharingStarted.Eagerly, persistentMapOf())
+
+    val activeCallIds: StateFlow<PersistentSet<String>> = CallRepository.sessions
+        .map { it.keys.toPersistentSet() }
+        .stateIn(scope, SharingStarted.Eagerly, kotlinx.collections.immutable.persistentSetOf())
+
+    // Helper to avoid re-calculating the whole map for observers who only care about one call
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun getCallMetadata(id: String): Flow<CallMetadata?> {
+        return CallRepository.sessions.map { it[id] }
+            .flatMapLatest { it?.metadata ?: flowOf(null) }
+            .distinctUntilChanged()
+    }
+
+    // 3. Unified Legacy State (For backward compatibility with minimum diffing)
+    val state: StateFlow<CallManagerState> = combine(
+        activeCalls,
+        _currentCallId,
+        _isMuted,
+        _isSpeakerOn
+    ) { calls, currentId, muted, speaker ->
+        CallManagerState(
+            activeCalls = calls,
+            currentCallId = currentId,
+            isMuted = muted,
+            isSpeakerOn = speaker,
+            isHolding = calls.values.any { it.isHolding }
+        )
+    }
+    .stateIn(scope, SharingStarted.Eagerly, CallManagerState())
 
     private val _actions = MutableSharedFlow<Pair<String, CallAction>>(
         replay = 1,
@@ -44,25 +75,15 @@ object CallStateManager {
     )
     val actions: SharedFlow<Pair<String, CallAction>> = _actions.asSharedFlow()
 
-    // Derived properties - Now delegating to new components
-    val activeCalls: StateFlow<Map<String, CallMetadata>> = state
-        .map { it.activeCalls }
-        .stateIn(scope, SharingStarted.Eagerly, emptyMap())
-
-    val totalActiveCalls: StateFlow<Int> = activeCalls
-        .map { it.size }
-        .stateIn(scope, SharingStarted.Eagerly, 0)
+    // 4. Derived Logic
+    val totalActiveCalls: StateFlow<Int> = activeCallIds.map { it.size }.stateIn(scope, SharingStarted.Eagerly, 0)
 
     val isSimulatedCallActive: StateFlow<Boolean> = activeCalls
         .map { calls -> calls.values.any { it.isSimulated && it.state != Call.STATE_DISCONNECTED } }
         .stateIn(scope, SharingStarted.Eagerly, false)
 
     val currentCall: StateFlow<Call?> = state
-        .map { s -> 
-            s.activeCalls[s.currentCallId]?.call 
-                ?: s.activeCalls.values.find { it.state == Call.STATE_ACTIVE }?.call 
-                ?: s.activeCalls.values.lastOrNull()?.call 
-        }
+        .map { s -> s.activeCalls[s.currentCallId]?.call ?: s.activeCalls.values.find { it.state == Call.STATE_ACTIVE }?.call }
         .stateIn(scope, SharingStarted.Eagerly, null)
 
     val isRealCall: StateFlow<Boolean> = activeCalls
@@ -75,13 +96,11 @@ object CallStateManager {
 
     val busyMessage: StateFlow<String?> = CallCoordinator.busyMessage
 
-    val isHolding: StateFlow<Boolean> = state
-        .map { it.isHolding }
-        .stateIn(scope, SharingStarted.Eagerly, false)
+    val isHolding: StateFlow<Boolean> = state.map { it.isHolding }.stateIn(scope, SharingStarted.Eagerly, false)
 
     val isCloaking: Boolean
         get() {
-            val active = state.value.activeCalls.values.find { it.phase != SimulationPhase.IDLE }
+            val active = activeCalls.value.values.find { it.phase != SimulationPhase.IDLE }
             return (active?.phase == SimulationPhase.DIALING || active?.phase == SimulationPhase.RINGING) &&
                     (active?.state == Call.STATE_ACTIVE)
         }
@@ -102,9 +121,6 @@ object CallStateManager {
                 ?: SimulationPhase.IDLE 
         }
         .stateIn(scope, SharingStarted.Eagerly, SimulationPhase.IDLE)
-
-    val isMuted: StateFlow<Boolean> = _state.map { it.isMuted }.stateIn(scope, SharingStarted.Eagerly, false)
-    val isSpeakerOn: StateFlow<Boolean> = _state.map { it.isSpeakerOn }.stateIn(scope, SharingStarted.Eagerly, false)
 
     @Volatile var onCallStateChangedHook: ((Call, Int) -> Unit)? = null
     @Volatile var onMuteRequested: ((Boolean) -> Unit)? = null
@@ -130,31 +146,22 @@ object CallStateManager {
         }
     }
 
-    fun setIsMuted(muted: Boolean) {
-        _state.update { it.copy(isMuted = muted) }
-    }
+    fun setIsMuted(muted: Boolean) { _isMuted.value = muted }
+    fun setIsSpeakerOn(on: Boolean) { _isSpeakerOn.value = on }
+    fun setIsHolding(holding: Boolean, id: String? = null) { /* Handled by session metadata updates */ }
 
-    fun setIsSpeakerOn(on: Boolean) {
-        _state.update { it.copy(isSpeakerOn = on) }
-    }
-
-    fun setIsHolding(holding: Boolean, id: String? = null) {
-        _state.update { it.copy(isHolding = holding) }
-    }
-
-    fun toggleMute() { onMuteRequested?.invoke(!_state.value.isMuted) }
-    fun toggleSpeaker() { onSpeakerRequested?.invoke(!_state.value.isSpeakerOn) }
+    fun toggleMute() { onMuteRequested?.invoke(!isMuted.value) }
+    fun toggleSpeaker() { onSpeakerRequested?.invoke(!isSpeakerOn.value) }
 
     fun updateAudioState(muted: Boolean, speaker: Boolean) {
-        _state.update { it.copy(isMuted = muted, isSpeakerOn = speaker) }
+        _isMuted.value = muted
+        _isSpeakerOn.value = speaker
     }
 
     // --- Session-based entry points ---
 
     fun onCallAdded(call: Call, isSimulated: Boolean? = null, handler: android.os.Handler? = null) {
         val id = call.getAlibiId()
-        
-        // Check if already registered
         if (CallRepository.getSession(id) != null) return
 
         val isSimulatedCall = isSimulated ?: (call.details.extras?.containsKey(TelecomConstants.EXTRA_ALIBI_CALL_ID) == true)
@@ -162,9 +169,7 @@ object CallStateManager {
         if (!isSimulatedCall) {
             val session = RealCallSession(call, id)
             CallRepository.addSession(session)
-            
-            // Sync current ID
-            _state.update { it.copy(currentCallId = id) }
+            _currentCallId.value = id
         }
     }
 
@@ -176,17 +181,15 @@ object CallStateManager {
 
     fun removeCall(id: String) {
         CallRepository.removeSession(id)
-        _state.update { s ->
-            if (s.currentCallId == id) {
-                // Smart Promotion: Pick next best call
-                val remaining = state.value.activeCalls - id
-                val nextId = remaining.values.find { it.state == Call.STATE_ACTIVE }?.id
-                    ?: remaining.values.find { it.state == Call.STATE_RINGING }?.id
-                    ?: remaining.keys.lastOrNull()
-                
-                Log.d(TAG, "Smart Promotion: $id removed, next primary is $nextId")
-                s.copy(currentCallId = nextId)
-            } else s
+        if (_currentCallId.value == id) {
+            // Smart Promotion: Pick next best call
+            val remaining = activeCalls.value - id
+            val nextId = remaining.values.find { it.state == Call.STATE_ACTIVE }?.id
+                ?: remaining.values.find { it.state == Call.STATE_RINGING }?.id
+                ?: remaining.keys.lastOrNull()
+            
+            Log.d(TAG, "Smart Promotion: $id removed, next primary is $nextId")
+            _currentCallId.value = nextId
         }
     }
 
@@ -202,11 +205,7 @@ object CallStateManager {
     }
 
     fun completeCall(id: String): CallLogSnapshot? {
-        val session = CallRepository.getSession(id)
-        if (session == null) {
-            Log.w(TAG, "completeCall: Session not found for $id. Available: ${CallRepository.sessions.value.keys}")
-            return null
-        }
+        val session = CallRepository.getSession(id) ?: return null
         val meta = session.metadata.value
         val snapshot = CallLogSnapshot(
             number = meta.number,
@@ -223,26 +222,25 @@ object CallStateManager {
     }
 
     fun answer(id: String? = null) {
-        val targetId = id ?: state.value.currentCallId ?: return
+        val targetId = id ?: currentCallId.value ?: return
         CallRepository.getSession(targetId)?.answer()
     }
 
     fun disconnect(id: String? = null) {
-        val targetId = id ?: state.value.currentCallId ?: return
+        val targetId = id ?: currentCallId.value ?: return
         CallRepository.getSession(targetId)?.hangup()
     }
 
     fun hold(id: String? = null) {
-        val targetId = id ?: state.value.currentCallId ?: return
+        val targetId = id ?: currentCallId.value ?: return
         CallRepository.getSession(targetId)?.hold()
     }
 
     fun resume(id: String? = null) {
-        val targetId = id ?: state.value.currentCallId ?: return
+        val targetId = id ?: currentCallId.value ?: return
         CallRepository.getSession(targetId)?.resume()
     }
 
-    // For compatibility with SimulationController
     fun updateCallState(id: String, state: Int, overridePhase: SimulationPhase? = null) {
         val session = CallRepository.getSession(id)
         when (session) {
@@ -254,32 +252,27 @@ object CallStateManager {
     fun registerConnection(id: String, connection: com.example.alibi.service.SimulatedConnection) {
         val session = com.example.alibi.telecom.session.SimulatedCallSession(connection, id)
         CallRepository.addSession(session)
-        _state.update { it.copy(currentCallId = id) }
+        _currentCallId.value = id
     }
 
-    fun unregisterConnection(id: String) {
-        removeCall(id)
-    }
+    fun unregisterConnection(id: String) { removeCall(id) }
 
     fun clearAllCalls() {
         CallRepository.sessions.value.values.forEach { it.hangup() }
         CallRepository.clear()
-        _state.update { CallManagerState() }
+        _currentCallId.value = null
     }
 
-    // Legacy method for DialerScreen optimistic calls
     fun addCall(id: String, info: CallMetadata) {
         Log.d(TAG, "addCall (optimistic): $id")
         if (CallRepository.getSession(id) == null) {
             CallRepository.addSession(com.example.alibi.telecom.session.OptimisticCallSession(info))
-            _state.update { it.copy(currentCallId = id) }
+            _currentCallId.value = id
         }
     }
 
     fun setSimulatedCallActive(request: SimulatedCallRequest) {
         val targetId = request.alibiId
-        Log.d(TAG, "setSimulatedCallActive (optimistic): $targetId")
-        
         if (CallRepository.getSession(targetId) == null) {
             val optimistic = CallMetadata(
                 id = targetId,
@@ -296,15 +289,11 @@ object CallStateManager {
                 startTime = request.startTime ?: System.currentTimeMillis()
             )
             CallRepository.addSession(com.example.alibi.telecom.session.OptimisticCallSession(optimistic))
-            _state.update { it.copy(currentCallId = targetId) }
+            _currentCallId.value = targetId
         }
     }
     
-    fun setSimulatedCallActive(active: Boolean, phoneNumber: String? = null, state: Int = Call.STATE_ACTIVE, type: Int? = null, id: String? = null) {
-        // Legacy support
-    }
-    
     fun isCurrentCallSimulated(): Boolean {
-        return state.value.activeCalls.values.any { it.isSimulated && it.state != Call.STATE_DISCONNECTED }
+        return activeCalls.value.values.any { it.isSimulated && it.state != Call.STATE_DISCONNECTED }
     }
 }

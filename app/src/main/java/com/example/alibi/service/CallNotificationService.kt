@@ -8,9 +8,13 @@ import android.os.IBinder
 import android.os.PowerManager
 import android.util.Log
 import android.content.pm.ServiceInfo
+import android.provider.CallLog
+import android.telecom.Call
 import com.example.alibi.receiver.CallActionReceiver
 import com.example.alibi.service.factory.CallNotificationFactory
+import com.example.alibi.telecom.CallRepository
 import com.example.alibi.telecom.CallStateManager
+import com.example.alibi.telecom.SimulationPhase
 import com.example.alibi.telecom.TelecomConstants
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -31,6 +35,7 @@ class CallNotificationService : Service() {
     private val lastNotificationStates = mutableMapOf<String, NotificationState>()
     private var foregroundCallId: String? = null
     private val debounceJobs = mutableMapOf<String, Job>()
+    private val surgicalCallJobs = mutableMapOf<String, Job>()
     private val notificationManager by lazy { getSystemService(NotificationManager::class.java) }
 
     private data class NotificationState(
@@ -49,98 +54,98 @@ class CallNotificationService : Service() {
         Log.d(TelecomConstants.NOTIFICATION_TAG, "[${System.currentTimeMillis()}] onCreate: Service created")
         audioHeartbeatManager = AudioHeartbeatManager.getInstance(this)
         notificationFactory = CallNotificationFactory(this)
+        
+        createNotificationChannels()
+        
+        // Unified Primary Strategy: Start foreground immediately with the Primary ID (101).
+        // This ID will be updated with actual call data as soon as it's available.
+        val bootstrap = notificationFactory.createBootstrapNotification(CHANNEL_ID)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(NOTIFICATION_ID, bootstrap, ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL)
+        } else {
+            startForeground(NOTIFICATION_ID, bootstrap)
+        }
+        Log.d(TelecomConstants.NOTIFICATION_TAG, "Bootstrap foreground started with ID $NOTIFICATION_ID.")
+
         val powerManager = getSystemService(POWER_SERVICE) as PowerManager
         wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, TelecomConstants.WAKE_LOCK_TAG).apply {
             acquire(10 * 60 * 1000L) // 10 minutes max safety
         }
-        createNotificationChannels()
         observeCallState()
     }
 
     private fun observeCallState() {
         serviceScope.launch {
-            CallStateManager.state
-                .map { it.activeCalls }
-                .distinctUntilChanged()
-                .flowOn(Dispatchers.Default)
-                .collect { calls ->
-                    Log.d(TelecomConstants.NOTIFICATION_TAG, "[${System.currentTimeMillis()}] observeCallState: Active calls update received. Count=${calls.size}")
+            CallStateManager.activeCallIds
+                .collect { ids ->
+                    Log.d(TelecomConstants.NOTIFICATION_TAG, "[${System.currentTimeMillis()}] observeCallState: Active call IDs update received. Count=${ids.size}")
                     
-                    if (calls.isEmpty()) {
+                    if (ids.isEmpty()) {
                         val now = System.currentTimeMillis()
-                        Log.d(TelecomConstants.NOTIFICATION_TAG, "[$now] observeCallState: No active calls. Starting total cleanup.")
+                        Log.d(TelecomConstants.NOTIFICATION_TAG, "[$now] observeCallState: No active calls. Preparing delayed stop.")
                         withContext(Dispatchers.Main) {
                             startDelayedStopCheck()
                         }
-                        
-                        // Task 17: Cancel all lingering notifications if any
-                        val idsToCancel = notificationMutex.withLock { activeNotificationIds.keys.toList() }
-                        Log.d(TelecomConstants.NOTIFICATION_TAG, "[$now] observeCallState: Cancelling ${idsToCancel.size} notifications")
-                        idsToCancel.forEach { cancelNotification(it) }
-                        
-                        // Master Clear: Ensure no stale state prevents future notifications
-                        lastNotificationStates.clear()
-                        debounceJobs.values.forEach { it.cancel() }
-                        debounceJobs.clear()
-                        
-                        return@collect
-                    }
-                    
-                    withContext(Dispatchers.Main) {
-                        cancelDelayedStop()
-                    }
-                    
-                    val anySimulated = calls.values.any { it.isSimulated }
-                    if (!anySimulated) {
-                        audioHeartbeatManager.stop()
-                    }
-
-                    // Task 17: Support Multi-Call updates near-instantly
-                    calls.forEach { (id, it) ->
-                        val newState = NotificationState(
-                            id = it.id,
-                            phoneNumber = it.number,
-                            name = it.name,
-                            isIncoming = if (it.isSimulated) it.phase == com.example.alibi.telecom.SimulationPhase.RINGING else it.state == android.telecom.Call.STATE_RINGING,
-                            isMissed = it.type == android.provider.CallLog.Calls.MISSED_TYPE,
-                            isDialing = if (it.isSimulated) it.phase == com.example.alibi.telecom.SimulationPhase.DIALING else (it.state == android.telecom.Call.STATE_DIALING || it.state == android.telecom.Call.STATE_CONNECTING),
-                            isSimulated = it.isSimulated,
-                            startTime = it.answerTime
-                        )
-
-                        if (newState == lastNotificationStates[id]) {
-                            return@forEach
+                    } else {
+                        withContext(Dispatchers.Main) {
+                            cancelDelayedStop()
                         }
-                        
-                        val oldState = lastNotificationStates[id]
-                        val isSignificantChange = oldState != null && (
-                            oldState.isIncoming != newState.isIncoming ||
-                            oldState.isDialing != newState.isDialing
-                        )
-
-                        Log.d(TelecomConstants.NOTIFICATION_TAG, "[${System.currentTimeMillis()}] observeCallState: State changed for $id.")
-                        lastNotificationStates[id] = newState
-
-                        showNotification(
-                            phoneNumber = it.number,
-                            name = it.name,
-                            isIncoming = newState.isIncoming,
-                            isMissed = newState.isMissed,
-                            isDialing = newState.isDialing,
-                            isSimulated = newState.isSimulated,
-                            startTime = newState.startTime,
-                            callId = it.id,
-                            instant = isSignificantChange
-                        )
                     }
 
-                    // Task 17: Clear stale notifications for calls that are gone
-                    val staleIds = notificationMutex.withLock { 
-                        activeNotificationIds.keys.filter { !calls.containsKey(it) }
+                    // 1. Cleanup jobs for calls that are gone
+                    val removedIds = surgicalCallJobs.keys.filter { it !in ids }
+                    removedIds.forEach { id ->
+                        surgicalCallJobs.remove(id)?.cancel()
+                        cancelNotification(id)
                     }
-                    staleIds.forEach { 
-                        Log.d(TelecomConstants.NOTIFICATION_TAG, "[${System.currentTimeMillis()}] observeCallState: Call $it is stale. Cancelling.")
-                        cancelNotification(it) 
+
+                    // 2. Start surgical collectors for new IDs
+                    ids.forEach { id ->
+                        if (id !in surgicalCallJobs) {
+                            surgicalCallJobs[id] = serviceScope.launch {
+                                CallStateManager.getCallMetadata(id).collect { meta ->
+                                    if (meta == null) {
+                                        cancelNotification(id)
+                                        return@collect
+                                    }
+                                    
+                                    val newState = NotificationState(
+                                        id = meta.id,
+                                        phoneNumber = meta.number,
+                                        name = meta.name,
+                                        isIncoming = if (meta.isSimulated) meta.phase == com.example.alibi.telecom.SimulationPhase.RINGING else meta.state == android.telecom.Call.STATE_RINGING,
+                                        isMissed = meta.type == android.provider.CallLog.Calls.MISSED_TYPE,
+                                        isDialing = if (meta.isSimulated) meta.phase == com.example.alibi.telecom.SimulationPhase.DIALING else (meta.state == android.telecom.Call.STATE_DIALING || meta.state == android.telecom.Call.STATE_CONNECTING),
+                                        isSimulated = meta.isSimulated,
+                                        startTime = meta.answerTime
+                                    )
+
+                                    if (newState == lastNotificationStates[id]) return@collect
+                                    
+                                    val oldState = lastNotificationStates[id]
+                                    // Significant change or the FIRST notification for a real call
+                                    val isSignificantChange = (oldState == null && !meta.isSimulated) || (oldState != null && (
+                                        oldState.isIncoming != newState.isIncoming ||
+                                        oldState.isDialing != newState.isDialing
+                                    ))
+
+                                    Log.d(TelecomConstants.NOTIFICATION_TAG, "[${System.currentTimeMillis()}] observeCallState: Surgical state changed for $id. Significant=$isSignificantChange")
+                                    // Don't update lastNotificationStates here; showNotification will do it.
+
+                                    showNotification(
+                                        phoneNumber = meta.number,
+                                        name = meta.name,
+                                        isIncoming = newState.isIncoming,
+                                        isMissed = newState.isMissed,
+                                        isDialing = newState.isDialing,
+                                        isSimulated = newState.isSimulated,
+                                        startTime = newState.startTime,
+                                        callId = meta.id,
+                                        instant = isSignificantChange
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
         }
@@ -175,21 +180,6 @@ class CallNotificationService : Service() {
             val startTime = it.getLongExtra(TelecomConstants.EXTRA_START_TIME, 0L)
             
             if (callId != null) {
-                val newState = NotificationState(
-                    id = callId,
-                    phoneNumber = phoneNumber,
-                    name = name,
-                    isIncoming = isIncoming,
-                    isMissed = isMissed,
-                    isDialing = isDialing,
-                    isSimulated = isSimulated,
-                    startTime = startTime
-                )
-                if (newState == lastNotificationStates[callId]) {
-                    return START_STICKY
-                }
-                lastNotificationStates[callId] = newState
-
                 val info = CallStateManager.activeCalls.value[callId]
                 val isExplicitlyDisconnected = info != null && (
                     info.state == android.telecom.Call.STATE_DISCONNECTED || 
@@ -201,6 +191,7 @@ class CallNotificationService : Service() {
                     return START_NOT_STICKY
                 }
 
+                // Force instant update in onStartCommand to clear bootstrap immediately
                 showNotification(
                     phoneNumber = phoneNumber,
                     name = name,
@@ -209,7 +200,8 @@ class CallNotificationService : Service() {
                     isDialing = isDialing,
                     isSimulated = isSimulated,
                     startTime = startTime,
-                    callId = callId
+                    callId = callId,
+                    instant = true
                 )
             }
         }
@@ -228,25 +220,36 @@ class CallNotificationService : Service() {
         instant: Boolean = false
     ) {
         if (callId == null) return
+        
+        val newState = NotificationState(
+            id = callId,
+            phoneNumber = phoneNumber,
+            name = name,
+            isIncoming = isIncoming,
+            isMissed = isMissed,
+            isDialing = isDialing,
+            isSimulated = isSimulated,
+            startTime = startTime
+        )
 
-        // Task 17: 150ms debounce for the FIRST notification of a simulated call
-        val isFirst = !activeNotificationIds.containsKey(callId)
-        if (isSimulated && isFirst && !instant) {
-            debounceJobs[callId]?.cancel()
-            debounceJobs[callId] = serviceScope.launch {
-                delay(150L)
-                performShowNotification(phoneNumber, name, isIncoming, isMissed, isDialing, isSimulated, startTime, callId)
-            }
-        } else {
-            debounceJobs[callId]?.cancel()
-            serviceScope.launch(Dispatchers.Default) {
-                performShowNotification(phoneNumber, name, isIncoming, isMissed, isDialing, isSimulated, startTime, callId)
-            }
+        // Single point of truth for deduplication: Check if state is truly new
+        val isNewState = lastNotificationStates[callId] != newState
+        if (!isNewState && !instant) {
+            Log.d(TelecomConstants.NOTIFICATION_TAG, "showNotification: Skipping duplicate state for $callId")
+            return
+        }
+        Log.d(TelecomConstants.NOTIFICATION_TAG, "showNotification: Processing update for $callId. Instant=$instant")
+
+        debounceJobs[callId]?.cancel()
+        // Use Main thread immediately for responsive foreground updates
+        serviceScope.launch(Dispatchers.Main) {
+            performShowNotification(newState, phoneNumber, name, isIncoming, isMissed, isDialing, isSimulated, startTime, callId)
         }
     }
 
     @SuppressLint("InsecureFullscreenIntent", "FullScreenIntentPolicy")
     private suspend fun performShowNotification(
+        newState: NotificationState,
         phoneNumber: String, 
         name: String, 
         isIncoming: Boolean, 
@@ -275,7 +278,7 @@ class CallNotificationService : Service() {
             // Determine if this call should be the foreground primary.
             // New incoming/dialing calls always take priority.
             val shouldBePrimary = when {
-                foregroundCallId == null -> true
+                foregroundCallId == null -> true // Take over from bootstrap or if idle
                 foregroundCallId == callId -> true
                 isIncoming -> true
                 isDialing -> true
@@ -296,22 +299,25 @@ class CallNotificationService : Service() {
                 isPrimary = shouldBePrimary
             )
 
-            withContext(Dispatchers.Main) {
-                // Ensure call still exists before posting
-                if (!CallStateManager.activeCalls.value.containsKey(callId)) return@withContext
+            // Ensure call still exists in CallRepository or CallStateManager before posting
+            val existsInRepo = CallRepository.sessions.value.containsKey(callId)
+            val existsInManager = CallStateManager.activeCalls.value.containsKey(callId)
+            if (!existsInRepo && !existsInManager) {
+                Log.w(TelecomConstants.NOTIFICATION_TAG, "performShowNotification: Call $callId no longer exists in repository or state manager. Aborting.")
+                return@withLock
+            }
 
-                val id = activeNotificationIds.getOrPut(callId) { getNotificationId(callId) }
-                activeNotifications[callId] = notification
-                
-                Log.d(TelecomConstants.NOTIFICATION_TAG, "Posting notification for $callId (id=$id). isPrimary=$shouldBePrimary")
-                
-                if (shouldBePrimary) {
-                    updateForegroundInternal(callId, notification)
-                } else {
-                    val now = System.currentTimeMillis()
-                    Log.d(TelecomConstants.NOTIFICATION_TAG, "[$now] Posting secondary notification for $callId")
-                    notificationManager.notify(id, notification)
-                }
+            val id = if (shouldBePrimary) NOTIFICATION_ID else getNotificationId(callId)
+            activeNotificationIds[callId] = id
+            activeNotifications[callId] = notification
+            lastNotificationStates[callId] = newState
+            
+            Log.d(TelecomConstants.NOTIFICATION_TAG, "Posting notification for $callId (id=$id). isPrimary=$shouldBePrimary")
+            
+            if (shouldBePrimary) {
+                updateForegroundInternal(callId, notification)
+            } else {
+                notificationManager.notify(id, notification)
             }
         }
     }
@@ -322,7 +328,43 @@ class CallNotificationService : Service() {
         }
     }
 
+    private fun getBestCallToPromote(excludingId: String): NotificationState? {
+        val states = lastNotificationStates.values.filter { it.id != excludingId }
+        
+        // Priority 1: Ringing / Incoming
+        states.find { it.isIncoming }?.let { return it }
+        
+        // Priority 2: Active ongoing call
+        states.find { !it.isIncoming && !it.isDialing && !it.isMissed }?.let { return it }
+        
+        // Priority 3: Dialing / Connecting call
+        states.find { it.isDialing }?.let { return it }
+        
+        // Priority 4: Any remaining notification state
+        states.firstOrNull()?.let { return it }
+
+        // Fallback: Inspect CallRepository sessions directly
+        val sessions = CallRepository.sessions.value.values.filter { it.id != excludingId }
+        val sessionMeta = sessions.firstOrNull()?.metadata?.value
+        if (sessionMeta != null) {
+            return NotificationState(
+                id = sessionMeta.id,
+                phoneNumber = sessionMeta.number,
+                name = sessionMeta.name,
+                isIncoming = if (sessionMeta.isSimulated) sessionMeta.phase == SimulationPhase.RINGING else sessionMeta.state == Call.STATE_RINGING,
+                isMissed = sessionMeta.type == CallLog.Calls.MISSED_TYPE,
+                isDialing = if (sessionMeta.isSimulated) sessionMeta.phase == SimulationPhase.DIALING else (sessionMeta.state == Call.STATE_DIALING || sessionMeta.state == Call.STATE_CONNECTING),
+                isSimulated = sessionMeta.isSimulated,
+                startTime = sessionMeta.answerTime
+            )
+        }
+
+        return null
+    }
+
     private suspend fun performCancelNotification(callId: String) {
+        var stateToPromote: NotificationState? = null
+        
         notificationMutex.withLock {
             val now = System.currentTimeMillis()
             debounceJobs.remove(callId)?.cancel()
@@ -330,34 +372,68 @@ class CallNotificationService : Service() {
             activeNotifications.remove(callId)
             lastNotificationStates.remove(callId)
             
-            if (id != null) {
+            // If it was a secondary notification, cancel its specific ID
+            if (id != null && id != NOTIFICATION_ID) {
                 notificationManager.cancel(id)
-                Log.d(TelecomConstants.NOTIFICATION_TAG, "[$now] performCancelNotification: Notification for $callId removed (id=$id)")
+                Log.d(TelecomConstants.NOTIFICATION_TAG, "[$now] performCancelNotification: Secondary notification for $callId removed (id=$id)")
             }
 
-            if (foregroundCallId == callId) {
+            // Orphan Guard: Check if current foregroundCallId corresponds to a live session or active notification
+            val isForegroundIdLive = foregroundCallId != null && (
+                CallRepository.sessions.value.containsKey(foregroundCallId) ||
+                activeNotificationIds.containsKey(foregroundCallId)
+            )
+            if (!isForegroundIdLive && foregroundCallId != null) {
+                Log.d(TelecomConstants.NOTIFICATION_TAG, "[$now] performCancelNotification: foregroundCallId ($foregroundCallId) is stale/orphaned. Resetting to null.")
                 foregroundCallId = null
-                // Promote next active call to foreground
-                val nextEntry = activeNotificationIds.entries.firstOrNull()
-                if (nextEntry != null) {
-                    val nextCallId = nextEntry.key
-                    val state = lastNotificationStates[nextCallId]
-                    if (state != null) {
-                        Log.d(TelecomConstants.NOTIFICATION_TAG, "[$now] performCancelNotification: Promoting $nextCallId to primary")
-                        // Re-trigger performShowNotification directly to rebuild as primary
-                        performShowNotification(
-                            phoneNumber = state.phoneNumber,
-                            name = state.name,
-                            isIncoming = state.isIncoming,
-                            isMissed = state.isMissed,
-                            isDialing = state.isDialing,
-                            isSimulated = state.isSimulated,
-                            startTime = state.startTime,
-                            callId = nextCallId
-                        )
-                    }
+            }
+
+            val hasOtherCalls = activeNotificationIds.isNotEmpty() 
+                || CallRepository.sessions.value.isNotEmpty()
+                || CallStateManager.activeCalls.value.isNotEmpty()
+
+            if (foregroundCallId == callId || foregroundCallId == null) {
+                foregroundCallId = null
+                
+                // Promote highest-priority active call to Primary slot (ID 101)
+                val bestCandidate = getBestCallToPromote(callId)
+                if (bestCandidate != null) {
+                    stateToPromote = bestCandidate
+                } else if (!hasOtherCalls) {
+                    Log.d(TelecomConstants.NOTIFICATION_TAG, "[$now] performCancelNotification: No active calls remaining. Cancelling ID $NOTIFICATION_ID and stopForeground(REMOVE).")
+                    notificationManager.cancel(NOTIFICATION_ID)
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    startDelayedStopCheck()
                 } else {
-                    Log.d(TelecomConstants.NOTIFICATION_TAG, "[$now] performCancelNotification: No more calls. stopForeground(REMOVE).")
+                    Log.d(TelecomConstants.NOTIFICATION_TAG, "[$now] performCancelNotification: Primary removed but other calls exist. Keeping foreground active.")
+                }
+            } else if (!hasOtherCalls) {
+                Log.d(TelecomConstants.NOTIFICATION_TAG, "[$now] performCancelNotification: Secondary call removed and no calls remain. Cancelling ID $NOTIFICATION_ID and stopForeground(REMOVE).")
+                notificationManager.cancel(NOTIFICATION_ID)
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                startDelayedStopCheck()
+            }
+        }
+
+        // Deadlock Fix & Fail-Safe Fallback: Call performShowNotification OUTSIDE the mutex with try-catch
+        stateToPromote?.let { state ->
+            Log.d(TelecomConstants.NOTIFICATION_TAG, "performCancelNotification: Executing promotion for ${state.id}")
+            try {
+                performShowNotification(
+                    newState = state,
+                    phoneNumber = state.phoneNumber,
+                    name = state.name,
+                    isIncoming = state.isIncoming,
+                    isMissed = state.isMissed,
+                    isDialing = state.isDialing,
+                    isSimulated = state.isSimulated,
+                    startTime = state.startTime,
+                    callId = state.id
+                )
+            } catch (e: Exception) {
+                Log.e(TelecomConstants.NOTIFICATION_TAG, "performCancelNotification: Promotion failed for ${state.id}. Fallback teardown.", e)
+                notificationMutex.withLock {
+                    notificationManager.cancel(NOTIFICATION_ID)
                     stopForeground(STOP_FOREGROUND_REMOVE)
                     startDelayedStopCheck()
                 }
@@ -367,14 +443,13 @@ class CallNotificationService : Service() {
 
 
     private fun updateForegroundInternal(callId: String, notification: Notification) {
-        val id = activeNotificationIds.getOrPut(callId) { getNotificationId(callId) }
         foregroundCallId = callId
-        Log.d(TelecomConstants.NOTIFICATION_TAG, "startForeground for call $callId with id $id")
+        Log.d(TelecomConstants.NOTIFICATION_TAG, "Updating Primary Foreground (ID $NOTIFICATION_ID) for call $callId")
         
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(id, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL)
+            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL)
         } else {
-            startForeground(id, notification)
+            startForeground(NOTIFICATION_ID, notification)
         }
     }
 
@@ -433,14 +508,14 @@ class CallNotificationService : Service() {
         if (wakeLock?.isHeld == true) {
             wakeLock?.release()
         }
-        // Ensure ALL notifications are cancelled on destroy
-        serviceScope.launch {
-            notificationMutex.withLock {
-                activeNotificationIds.values.forEach { notificationManager.cancel(it) }
-                activeNotificationIds.clear()
-                activeNotifications.clear()
-            }
-        }
+        
+        // Synchronous cleanup for maximum reliability on exit
+        notificationManager.cancelAll()
+        activeNotificationIds.clear()
+        activeNotifications.clear()
+        lastNotificationStates.clear()
+        
+        serviceScope.cancel()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

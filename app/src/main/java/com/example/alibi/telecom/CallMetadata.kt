@@ -3,10 +3,15 @@ package com.example.alibi.telecom
 import android.provider.CallLog
 import android.telecom.Call
 import android.telecom.PhoneAccountHandle
+import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.Stable
+import kotlinx.collections.immutable.PersistentMap
+import kotlinx.collections.immutable.persistentMapOf
 
 /**
  * Pure data registry for call state across the application.
  */
+@Immutable
 enum class SimulationPhase {
     IDLE,
     DIALING,
@@ -19,6 +24,7 @@ enum class SimulationPhase {
 /**
  * Atomic snapshot of a call's state.
  */
+@Stable
 data class CallMetadata(
     val id: String,
     val call: Call? = null,
@@ -39,6 +45,7 @@ data class CallMetadata(
 /**
  * Immutable snapshot of a call's metadata for logging.
  */
+@Immutable
 data class CallLogSnapshot(
     val number: String,
     val type: Int,
@@ -53,9 +60,10 @@ data class CallLogSnapshot(
 /**
  * Unified state for the Call Manager.
  */
+@Stable
 data class CallManagerState(
-    val activeCalls: Map<String, CallMetadata> = emptyMap(),
-    val pendingMetadata: Map<String, SimulatedCallRequest> = emptyMap(),
+    val activeCalls: PersistentMap<String, CallMetadata> = persistentMapOf(),
+    val pendingMetadata: PersistentMap<String, SimulatedCallRequest> = persistentMapOf(),
     val currentCallId: String? = null,
     val isMuted: Boolean = false,
     val isSpeakerOn: Boolean = false,

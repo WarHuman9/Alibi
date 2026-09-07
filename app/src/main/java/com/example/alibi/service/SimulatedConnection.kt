@@ -181,7 +181,7 @@ class SimulatedConnection(
     }
 
     private fun updateNotification() {
-        val calls = CallStateManager.state.value.activeCalls
+        val calls = CallStateManager.activeCalls.value
         val metadata = calls[connectionId]
         val phase = metadata?.phase
         val isDialingPhase = phase == com.example.alibi.telecom.SimulationPhase.DIALING || 
