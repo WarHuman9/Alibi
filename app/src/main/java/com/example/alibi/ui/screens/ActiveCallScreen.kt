@@ -1,9 +1,11 @@
 package com.example.alibi.ui.screens
 
 import android.telecom.Call
+import android.util.Log
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Call
 import androidx.compose.material3.*
@@ -21,7 +23,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.alibi.telecom.CallStateManager
 import com.example.alibi.telecom.SimulationPhase
 import com.example.alibi.ui.components.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.firstOrNull
 import java.util.Locale
 import kotlin.time.Duration.Companion.seconds
 
@@ -37,9 +41,58 @@ fun ActiveCallScreen(
     val speakerOn by CallStateManager.isSpeakerOn.collectAsStateWithLifecycle()
     
     if (callInfo == null) {
-        // Fallback for when call is removed from state but screen is still transitioning
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator()
+        // Diagnostic timeout guard: log warning only if dead route persists for > 1500ms without cleanup
+        LaunchedEffect(callId) {
+            delay(1500)
+            if (CallStateManager.getCallMetadata(callId).firstOrNull() == null) {
+                Log.d("Alibi_UI", "ActiveCallScreen: Dead route $callId retained past 1500ms transition window.")
+            }
+        }
+
+        // Exact ActiveCallScreen theme and layout matching "Call Ended" state
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            MaterialTheme.colorScheme.surface,
+                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+                        )
+                    )
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Surface(
+                    modifier = Modifier.size(100.dp),
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    tonalElevation = 8.dp
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Call,
+                        contentDescription = null,
+                        modifier = Modifier
+                            .padding(24.dp)
+                            .fillMaxSize(),
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(32.dp))
+
+                Text(
+                    text = "Call Ended",
+                    style = MaterialTheme.typography.titleMedium.copy(
+                        fontWeight = FontWeight.Light
+                    ),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
         return
     }
@@ -90,7 +143,7 @@ fun ActiveCallScreen(
     val locale = configuration.locales[0]
     val timeText = String.format(locale, "%02d:%02d", durationSeconds / 60, durationSeconds % 60)
 
-    var lastDurationText by remember { mutableStateOf("00:00") }
+    var lastDurationText by rememberSaveable { mutableStateOf("00:00") }
     if (durationSeconds > 0) {
         lastDurationText = timeText
     }

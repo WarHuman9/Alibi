@@ -33,7 +33,9 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.app.role.RoleManager
 import android.content.pm.PackageManager
+import android.telecom.Call
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.delay
 
 class MainActivity : ComponentActivity() {
 
@@ -223,19 +225,33 @@ fun AlibiApp() {
 
         if (callToShow != null) {
             val callId = callToShow.id
-            if (callId.isNotBlank() && backStack.lastOrNull() !is ActiveCallRoute) {
-                backStack.add(ActiveCallRoute(callId))
+            if (callId.isNotBlank()) {
+                val currentRoute = backStack.lastOrNull()
+                if (currentRoute !is ActiveCallRoute || currentRoute.callId != callId) {
+                    if (currentRoute is ActiveCallRoute) {
+                        Log.d("AlibiApp", "Switching ActiveCallRoute from ${currentRoute.callId} to $callId")
+                        backStack.removeLastOrNull()
+                    } else {
+                        Log.d("AlibiApp", "Navigating to ActiveCallRoute for $callId")
+                    }
+                    backStack.add(ActiveCallRoute(callId))
+                }
             }
         } else {
-            // If the map becomes empty OR all calls are DISCONNECTED, return to Setup
+            // If the map becomes empty OR all calls are DISCONNECTED, return to MainTabsRoute
             if (backStack.any { it is ActiveCallRoute }) {
-                // Task: Staggered navigation to allow system animations (notifications) to clear first.
-                kotlinx.coroutines.delay(300)
-                Log.d("AlibiApp", "No active calls detected. Clearing backstack to SetupRoute.")
-                // Navigation 3: popUpTo(SetupRoute) { inclusive = true } equivalent:
-                // Clear the backstack and ensure MainTabsRoute (Setup) is the only entry.
-                backStack.clear()
-                backStack.add(MainTabsRoute)
+                // 100ms settling debounce to allow smooth call handoffs/preemption without navigation flickering
+                delay(100)
+                val recheckedCall = CallStateManager.activeCalls.value.values.find {
+                    it.state == Call.STATE_DIALING ||
+                    it.state == Call.STATE_RINGING ||
+                    it.state == Call.STATE_ACTIVE
+                }
+                if (recheckedCall == null && backStack.any { it is ActiveCallRoute }) {
+                    Log.d("AlibiApp", "No active calls detected after 100ms debounce. Clearing backstack to MainTabsRoute.")
+                    backStack.clear()
+                    backStack.add(MainTabsRoute)
+                }
             }
         }
     }

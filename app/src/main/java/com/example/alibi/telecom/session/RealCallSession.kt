@@ -4,6 +4,7 @@ import android.os.Build
 import android.telecom.Call
 import android.telecom.VideoProfile
 import com.example.alibi.telecom.CallMetadata
+import com.example.alibi.telecom.CallStateManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -23,6 +24,9 @@ class RealCallSession(
     private val callback = object : Call.Callback() {
         override fun onStateChanged(call: Call, state: Int) {
             updateMetadata()
+            if (state == Call.STATE_DISCONNECTED || state == Call.STATE_DISCONNECTING) {
+                CallStateManager.removeCall(id)
+            }
         }
 
         override fun onDetailsChanged(call: Call, details: Call.Details) {

@@ -360,6 +360,8 @@ class CallNotificationService : Service() {
         
         notificationMutex.withLock {
             val now = System.currentTimeMillis()
+            val otherSessions = CallRepository.sessions.value.keys.filter { it != callId }
+            val otherActiveCalls = CallStateManager.activeCalls.value.keys.filter { it != callId }
 
             // Safeguard #1: Idempotency check to safely handle duplicate/late cancellations
             val isAlreadyCleared = !activeNotificationIds.containsKey(callId)
@@ -369,8 +371,8 @@ class CallNotificationService : Service() {
 
             if (isAlreadyCleared) {
                 val hasOtherCalls = activeNotificationIds.isNotEmpty() 
-                    || CallRepository.sessions.value.isNotEmpty()
-                    || CallStateManager.activeCalls.value.isNotEmpty()
+                    || otherSessions.isNotEmpty()
+                    || otherActiveCalls.isNotEmpty()
 
                 if (!hasOtherCalls) {
                     Log.d(TelecomConstants.NOTIFICATION_TAG, "[$now] performCancelNotification: Call $callId already cleared and no calls remain. Idempotent teardown check.")
@@ -395,7 +397,7 @@ class CallNotificationService : Service() {
             }
 
             // Orphan Guard: Check if current foregroundCallId corresponds to a live session or active notification
-            val isForegroundIdLive = foregroundCallId != null && (
+            val isForegroundIdLive = foregroundCallId == null || foregroundCallId == callId || (
                 CallRepository.sessions.value.containsKey(foregroundCallId) ||
                 activeNotificationIds.containsKey(foregroundCallId)
             )
@@ -405,8 +407,8 @@ class CallNotificationService : Service() {
             }
 
             val hasOtherCalls = activeNotificationIds.isNotEmpty() 
-                || CallRepository.sessions.value.isNotEmpty()
-                || CallStateManager.activeCalls.value.isNotEmpty()
+                || otherSessions.isNotEmpty()
+                || otherActiveCalls.isNotEmpty()
 
             if (foregroundCallId == callId || foregroundCallId == null) {
                 foregroundCallId = null
