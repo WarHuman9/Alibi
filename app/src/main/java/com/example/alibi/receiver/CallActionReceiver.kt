@@ -4,21 +4,18 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import com.example.alibi.telecom.CallStateManager
+import com.example.alibi.telecom.TelecomConstants
 
 class CallActionReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
+        val callId = intent.getStringExtra(TelecomConstants.EXTRA_CALL_ID) ?: return
         when (intent.action) {
-            ACTION_HANGUP -> {
-                CallStateManager.disconnect()
+            TelecomConstants.ACTION_HANGUP -> {
+                CallStateManager.disconnect(callId)
             }
-            ACTION_ANSWER -> {
-                CallStateManager.answer()
+            TelecomConstants.ACTION_ANSWER -> {
+                CallStateManager.answer(callId)
             }
         }
-    }
-
-    companion object {
-        const val ACTION_HANGUP = "com.example.alibi.ACTION_HANGUP"
-        const val ACTION_ANSWER = "com.example.alibi.ACTION_ANSWER"
     }
 }

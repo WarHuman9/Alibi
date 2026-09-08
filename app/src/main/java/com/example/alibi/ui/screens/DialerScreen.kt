@@ -1,5 +1,8 @@
 package com.example.alibi.ui.screens
 
+import android.annotation.SuppressLint
+import android.util.Log
+import android.widget.Toast
 import android.provider.CallLog
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
@@ -30,22 +33,31 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.alibi.MainActivity
+import com.example.alibi.ui.MainViewModel
+import com.example.alibi.telecom.CallMetadata
 import com.example.alibi.telecom.CallStateManager
 import com.example.alibi.telecom.TelecomHelper
 import com.example.alibi.util.CallLogHelper
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
-import java.util.*
+import java.util.Date
+import java.util.Locale
+import java.util.UUID
 
 enum class PhoneSubTab { RECENTS, CONTACTS }
 
 /**
  * Main Dialer interface. Manages sub-tabs, search, and the interactive dial pad.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun DialerScreen(initialNumber: String? = null) {
+fun DialerScreen(
+    mainViewModel: MainViewModel = viewModel()
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val telecomHelper = remember { TelecomHelper(context) }
@@ -53,15 +65,25 @@ fun DialerScreen(initialNumber: String? = null) {
     
     val isBusy by CallStateManager.isBusy.collectAsStateWithLifecycle()
     val busyMessage by CallStateManager.busyMessage.collectAsStateWithLifecycle()
+    
+    val systemStatus = MainActivity.LocalSystemStatus.current
+    val deeplinkNumber by mainViewModel.deeplinkNumber.collectAsStateWithLifecycle()
 
     var selectedTab by rememberSaveable { mutableStateOf(PhoneSubTab.RECENTS) }
     var searchQuery by rememberSaveable { mutableStateOf("") }
-    var phoneNumber by rememberSaveable { mutableStateOf(initialNumber ?: "") }
+    var phoneNumber by rememberSaveable { mutableStateOf("") }
+
+    // Sync phoneNumber with deep-links
+    LaunchedEffect(deeplinkNumber) {
+        deeplinkNumber?.let {
+            phoneNumber = it
+            mainViewModel.consumeDeeplink()
+            selectedTab = PhoneSubTab.RECENTS
+        }
+    }
     
     // --- Reactive Data ---
-    val hasCallLogPermission by remember { 
-        mutableStateOf(ContextCompat.checkSelfPermission(context, android.Manifest.permission.READ_CALL_LOG) == android.content.pm.PackageManager.PERMISSION_GRANTED)
-    }
+    val hasCallLogPermission = systemStatus.isCallLogGranted
     val recentCalls by if (hasCallLogPermission) {
         callLogHelper.getRecentCallsFlow(500).collectAsStateWithLifecycle(null)
     } else {
@@ -69,9 +91,16 @@ fun DialerScreen(initialNumber: String? = null) {
     }
     
     val simAccounts = remember { mutableStateListOf<TelecomHelper.SimAccount>() }
-    LaunchedEffect(Unit) {
-        simAccounts.clear()
-        simAccounts.addAll(telecomHelper.getCallCapableSims())
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val lifecycleState by lifecycleOwner.lifecycle.currentStateFlow.collectAsStateWithLifecycle()
+
+    @SuppressLint("MissingPermission")
+    LaunchedEffect(lifecycleState) {
+        if (lifecycleState == Lifecycle.State.RESUMED) {
+            val accounts = telecomHelper.getCallCapableSims()
+            simAccounts.clear()
+            simAccounts.addAll(accounts)
+        }
     }
     
     // --- UI State ---
@@ -131,11 +160,17 @@ fun DialerScreen(initialNumber: String? = null) {
                         )
                     }
                 } else {
+                    val filteredCalls = remember(searchQuery, displayCalls) {
+                        displayCalls.filter { 
+                            it.number.contains(searchQuery) || 
+                            (it.name?.contains(searchQuery, true) ?: false) 
+                        }
+                    }
                     when (selectedTab) {
                         PhoneSubTab.RECENTS -> {
                             RecentCallsList(
                                 state = listState,
-                                calls = displayCalls.filter { it.number.contains(searchQuery) || (it.name?.contains(searchQuery, true) ?: false) },
+                                calls = filteredCalls,
                                 sims = simAccounts,
                                 onCallClick = { 
                                     phoneNumber = it
@@ -172,10 +207,12 @@ fun DialerScreen(initialNumber: String? = null) {
             enter = expandVertically() + fadeIn(),
             exit = shrinkVertically() + fadeOut()
         ) {
+            val isCallEnabled = phoneNumber.filter { it.isDigit() }.length == 10
             DialPad(
                 phoneNumber = phoneNumber,
                 selectedSim = selectedSim,
                 availableSims = simAccounts,
+                isCallEnabled = isCallEnabled,
                 onDigitClick = { phoneNumber += it },
                 onBackspace = { if (phoneNumber.isNotEmpty()) phoneNumber = phoneNumber.dropLast(1) },
                 onSimSelected = { 
@@ -183,9 +220,33 @@ fun DialerScreen(initialNumber: String? = null) {
                     telecomHelper.setPreferredSimId(it.handle.id)
                 },
                 onCallClick = { 
-                    if (phoneNumber.isNotEmpty() && !isBusy) {
-                        scope.launch {
-                            telecomHelper.placeRealCall(phoneNumber, selectedSim?.handle)
+                    if (isCallEnabled && !isBusy) {
+                        if (!systemStatus.isPhonePermissionsGranted) {
+                            Toast.makeText(context, "Phone permission required", Toast.LENGTH_LONG).show()
+                            (context as? MainActivity)?.triggerRepair()
+                        } else {
+                            scope.launch {
+                                // Inject optimistic metadata for real call to enable UI tracking
+                                val callId = "REAL_${UUID.randomUUID()}"
+                                CallStateManager.addCall(callId, CallMetadata(
+                                    id = callId,
+                                    number = phoneNumber,
+                                    isRealCall = true,
+                                    state = android.telecom.Call.STATE_CONNECTING
+                                ))
+                                
+                                try {
+                                    @SuppressLint("MissingPermission")
+                                    telecomHelper.placeRealCall(phoneNumber, selectedSim?.handle, callId)
+                                } catch (e: SecurityException) {
+                                    Log.e("DialerScreen", "SecurityException: Phone permission revoked mid-dial", e)
+                                    Toast.makeText(context, "Error: Permission revoked", Toast.LENGTH_SHORT).show()
+                                    CallStateManager.removeCall(callId)
+                                } catch (e: Exception) {
+                                    Log.e("DialerScreen", "Failed to place real call", e)
+                                    CallStateManager.removeCall(callId)
+                                }
+                            }
                         }
                     }
                 }
@@ -266,8 +327,10 @@ private fun SearchBar(query: String, onQueryChange: (String) -> Unit, placeholde
 fun RecentCallsList(state: LazyListState, calls: List<CallLogHelper.CallLogItem>, sims: List<TelecomHelper.SimAccount>, onCallClick: (String) -> Unit) {
     LazyColumn(state = state, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
         items(calls, key = { it.id }) { call ->
-            val sim = sims.find { it.handle.id == call.phoneAccountId && it.handle.componentName.flattenToString() == call.phoneAccountComponent } 
-                ?: sims.find { it.handle.id == call.phoneAccountId }
+            val sim = sims.find { 
+                it.handle.id == call.phoneAccountId && 
+                it.handle.componentName?.flattenToString() == call.phoneAccountComponent 
+            } ?: sims.find { it.handle.id == call.phoneAccountId }
             RecentCallListItem(call = call, simLabel = sim?.label ?: "Unknown", onClick = { onCallClick(call.number) })
         }
     }
@@ -297,7 +360,8 @@ private fun RecentCallListItem(call: CallLogHelper.CallLogItem, simLabel: String
         modifier = Modifier.clickable { onClick() },
         headlineContent = { 
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(text = call.name ?: call.number, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
+                val displayName = call.name?.takeIf { it.isNotBlank() } ?: call.number.takeIf { it.isNotBlank() } ?: "Unknown"
+                Text(text = displayName, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.width(8.dp))
                 if ((call.features and CallLog.Calls.FEATURES_HD_CALL) != 0) FeatureBadge(Icons.Rounded.HighQuality)
                 if ((call.features and CallLog.Calls.FEATURES_WIFI) != 0) FeatureBadge(Icons.Rounded.Wifi)
@@ -334,9 +398,8 @@ private fun formatDuration(seconds: Long): String {
     return if (seconds >= 60) "${seconds / 60}m ${seconds % 60}s" else "${seconds}s"
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun DialPad(phoneNumber: String, selectedSim: TelecomHelper.SimAccount?, availableSims: List<TelecomHelper.SimAccount>, onDigitClick: (String) -> Unit, onBackspace: () -> Unit, onSimSelected: (TelecomHelper.SimAccount) -> Unit, onCallClick: () -> Unit) {
+fun DialPad(phoneNumber: String, selectedSim: TelecomHelper.SimAccount?, availableSims: List<TelecomHelper.SimAccount>, isCallEnabled: Boolean, onDigitClick: (String) -> Unit, onBackspace: () -> Unit, onSimSelected: (TelecomHelper.SimAccount) -> Unit, onCallClick: () -> Unit) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp),
@@ -357,6 +420,7 @@ fun DialPad(phoneNumber: String, selectedSim: TelecomHelper.SimAccount?, availab
             DialPadActions(
                 availableSims = availableSims,
                 selectedSim = selectedSim,
+                isCallEnabled = isCallEnabled,
                 onSimSelected = onSimSelected,
                 onCallClick = onCallClick
             )
@@ -377,7 +441,7 @@ private fun NumberDisplay(phoneNumber: String, onBackspace: () -> Unit) {
 }
 
 @Composable
-private fun DialPadActions(availableSims: List<TelecomHelper.SimAccount>, selectedSim: TelecomHelper.SimAccount?, onSimSelected: (TelecomHelper.SimAccount) -> Unit, onCallClick: () -> Unit) {
+private fun DialPadActions(availableSims: List<TelecomHelper.SimAccount>, selectedSim: TelecomHelper.SimAccount?, isCallEnabled: Boolean, onSimSelected: (TelecomHelper.SimAccount) -> Unit, onCallClick: () -> Unit) {
     var showSimMenu by remember { mutableStateOf(false) }
 
     Row(modifier = Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
@@ -396,9 +460,13 @@ private fun DialPadActions(availableSims: List<TelecomHelper.SimAccount>, select
 
         Button(
             onClick = onCallClick,
+            enabled = isCallEnabled,
             modifier = Modifier.size(56.dp),
             shape = CircleShape,
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50)),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = Color(0xFF4CAF50),
+                disabledContainerColor = Color(0xFF4CAF50).copy(alpha = 0.3f)
+            ),
             contentPadding = PaddingValues(0.dp)
         ) { Icon(Icons.Rounded.Call, contentDescription = null, tint = Color.White, modifier = Modifier.size(28.dp)) }
 

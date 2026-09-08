@@ -13,6 +13,7 @@ import android.telecom.TelecomManager
 import android.telephony.TelephonyManager
 import android.Manifest
 import android.annotation.SuppressLint
+import androidx.annotation.RequiresPermission
 import android.provider.CallLog
 import android.util.Log
 import androidx.core.content.ContextCompat
@@ -20,12 +21,6 @@ import com.example.alibi.service.SimulatedConnectionService
 import androidx.core.content.edit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import com.example.alibi.telecom.TelecomConstants.EXTRA_AUTO_ANSWER_DELAY
-import com.example.alibi.telecom.TelecomConstants.EXTRA_CALL_FEATURES
-import com.example.alibi.telecom.TelecomConstants.EXTRA_CALL_TYPE
-import com.example.alibi.telecom.TelecomConstants.EXTRA_CUSTOM_START_TIME
-import com.example.alibi.telecom.TelecomConstants.EXTRA_INTENDED_DURATION
-import com.example.alibi.telecom.TelecomConstants.EXTRA_MIMIC_SIM_HANDLE
 import com.example.alibi.telecom.TelecomConstants.SIMULATED_ACCOUNT_ID
 import com.example.alibi.telecom.TelecomConstants.SIMULATED_ACCOUNT_LABEL
 
@@ -35,22 +30,28 @@ import com.example.alibi.telecom.TelecomConstants.SIMULATED_ACCOUNT_LABEL
  */
 class TelecomHelper(private val context: Context) {
 
-    private val telecomManager = context.getSystemService(Context.TELECOM_SERVICE) as TelecomManager
-    private val telephonyManager = context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
-    private val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+    private val telecomManager = context.getSystemService(Context.TELECOM_SERVICE) as? TelecomManager
+    private val telephonyManager = context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
+    private val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
     
     private val componentName = ComponentName(context, SimulatedConnectionService::class.java)
     private val phoneAccountHandle = PhoneAccountHandle(componentName, SIMULATED_ACCOUNT_ID)
     private val prefs = context.getSharedPreferences("alibi_telecom_prefs", Context.MODE_PRIVATE)
 
     /**
+     * Checks if a specific permission is granted.
+     */
+    private fun hasPermission(permission: String): Boolean {
+        return ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+    }
+
+    /**
      * Checks if the app has the necessary phone-related permissions.
-     * On Android 11+, READ_PHONE_NUMBERS is required for certain TelecomManager operations.
      */
     fun hasPhonePermissions(): Boolean {
-        val hasState = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED
+        val hasState = hasPermission(Manifest.permission.READ_PHONE_STATE)
         val hasNumbers = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_NUMBERS) == PackageManager.PERMISSION_GRANTED
+            hasPermission(Manifest.permission.READ_PHONE_NUMBERS)
         } else true
         return hasState && hasNumbers
     }
@@ -58,7 +59,7 @@ class TelecomHelper(private val context: Context) {
     data class SimAccount(
         val handle: PhoneAccountHandle,
         val label: String,
-        val address: String?
+        val address: String?,
     )
 
     fun getPreferredSimId(): String? = prefs.getString("preferred_sim_id", null)
@@ -72,20 +73,29 @@ class TelecomHelper(private val context: Context) {
         val isWifiCallingActive: Boolean
     )
 
+    @SuppressLint("MissingPermission")
+    @RequiresPermission(Manifest.permission.READ_PHONE_STATE)
     suspend fun getNetworkSnapshot(): NetworkSnapshot = withContext(Dispatchers.IO) {
-        val hasPhoneState = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED
+        val hasPhoneState = hasPermission(Manifest.permission.READ_PHONE_STATE)
         
-        val isHd = hasPhoneState && when (val networkType = telephonyManager.dataNetworkType) {
+        // Fallback: If permission is missing or telephony hardware is absent
+        if (!hasPhoneState || telephonyManager == null) {
+            return@withContext NetworkSnapshot(isHdCapable = false, isWifiCallingActive = false)
+        }
+
+        val isHd = when (val networkType = telephonyManager.dataNetworkType) {
             TelephonyManager.NETWORK_TYPE_LTE, TelephonyManager.NETWORK_TYPE_IWLAN -> true
             else -> (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) && (networkType == TelephonyManager.NETWORK_TYPE_NR)
         }
 
         var isWifiCalling = false
-        val activeNetwork = connectivityManager.activeNetwork
-        val capabilities = connectivityManager.getNetworkCapabilities(activeNetwork)
-        if ((capabilities != null) && hasPhoneState) {
-            if (telephonyManager.dataNetworkType == TelephonyManager.NETWORK_TYPE_IWLAN) {
-                isWifiCalling = true
+        if (connectivityManager != null) {
+            val activeNetwork = connectivityManager.activeNetwork
+            val capabilities = connectivityManager.getNetworkCapabilities(activeNetwork)
+            if (capabilities != null) {
+                if (telephonyManager.dataNetworkType == TelephonyManager.NETWORK_TYPE_IWLAN) {
+                    isWifiCalling = true
+                }
             }
         }
 
@@ -93,25 +103,26 @@ class TelecomHelper(private val context: Context) {
     }
 
     @SuppressLint("MissingPermission")
+    @RequiresPermission(allOf = [Manifest.permission.READ_PHONE_STATE, Manifest.permission.READ_PHONE_NUMBERS])
     suspend fun getCallCapableSims(): List<SimAccount> = withContext(Dispatchers.IO) {
-        if (!hasPhonePermissions()) {
-            Log.w(TAG, "getCallCapableSims: Missing phone permissions")
+        if (!hasPhonePermissions() || telecomManager == null) {
+            Log.w(TAG, "getCallCapableSims: Aborted (permissions missing or hardware absent)")
             return@withContext emptyList()
         }
         
         try {
             telecomManager.callCapablePhoneAccounts.mapNotNull { handle ->
-                val account = telecomManager.getPhoneAccount(handle)
-                if (handle.componentName.packageName != context.packageName) {
+                val account = telecomManager.getPhoneAccount(handle) ?: return@mapNotNull null
+                if (handle.componentName?.packageName != context.packageName) {
                     SimAccount(
                         handle = handle,
-                        label = account.label.toString(),
+                        label = account.label?.toString() ?: "Unknown",
                         address = account.address?.schemeSpecificPart
                     )
                 } else null
             }
-        } catch (_: Exception) {
-            Log.e("TelecomHelper", "Error fetching SIM accounts")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error fetching SIM accounts", e)
             emptyList()
         }
     }
@@ -119,8 +130,8 @@ class TelecomHelper(private val context: Context) {
     @Suppress("DEPRECATION")
     suspend fun registerPhoneAccount() = withContext(Dispatchers.IO) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            if (!hasPhonePermissions()) {
-                Log.w(TAG, "registerPhoneAccount: Aborted due to missing phone permissions")
+            if (!hasPhonePermissions() || telecomManager == null) {
+                Log.w(TAG, "registerPhoneAccount: Aborted due to missing phone permissions or hardware")
                 return@withContext
             }
 
@@ -129,9 +140,9 @@ class TelecomHelper(private val context: Context) {
                 // Check if account already exists with correct configuration
                 val currentAccount = telecomManager.getPhoneAccount(phoneAccountHandle)
                 
-                val needsUpdate = currentAccount == null || 
-                    currentAccount.label != SIMULATED_ACCOUNT_LABEL ||
-                    !currentAccount.hasCapabilities(PhoneAccount.CAPABILITY_SELF_MANAGED)
+                val needsUpdate = (currentAccount == null) || 
+                    (currentAccount.label != SIMULATED_ACCOUNT_LABEL) ||
+                    (!currentAccount.hasCapabilities(PhoneAccount.CAPABILITY_SELF_MANAGED))
 
                 if (needsUpdate) {
                     val phoneAccount = PhoneAccount.builder(phoneAccountHandle, SIMULATED_ACCOUNT_LABEL)
@@ -154,7 +165,7 @@ class TelecomHelper(private val context: Context) {
      * Verifies if the simulated account is currently recognized and enabled by the system.
      */
     suspend fun isAccountRegistered(): Boolean = withContext(Dispatchers.IO) {
-        if (!hasPhonePermissions()) return@withContext false
+        if (!hasPhonePermissions() || telecomManager == null) return@withContext false
         try {
             val account = telecomManager.getPhoneAccount(phoneAccountHandle)
             account != null && account.isEnabled
@@ -167,9 +178,11 @@ class TelecomHelper(private val context: Context) {
      * Purges legacy account IDs from the system registry.
      * This is intended to be called when the app is granted the Default Dialer role.
      */
+    @SuppressLint("MissingPermission")
+    @RequiresPermission(Manifest.permission.READ_PHONE_STATE)
     suspend fun cleanupLegacyAccounts() = withContext(Dispatchers.IO) {
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) {
-            Log.w(TAG, "Cleanup skipped: Missing READ_PHONE_STATE")
+        if (!hasPermission(Manifest.permission.READ_PHONE_STATE) || telecomManager == null) {
+            Log.w(TAG, "Cleanup skipped: Missing READ_PHONE_STATE or hardware absent")
             return@withContext
         }
 
@@ -179,7 +192,7 @@ class TelecomHelper(private val context: Context) {
             
             handles.forEach { handle ->
                 // Safety Guard: Only touch accounts belonging to OUR package
-                if (handle.componentName.packageName == context.packageName) {
+                if (handle.componentName?.packageName == context.packageName) {
                     // Purge if ID is in legacy list OR if it's not our stable ID
                     val isLegacy = TelecomConstants.LEGACY_ACCOUNT_IDS.contains(handle.id)
                     val isNotStable = handle.id != SIMULATED_ACCOUNT_ID
@@ -192,33 +205,15 @@ class TelecomHelper(private val context: Context) {
                 }
             }
             if (cleanupCount > 0) Log.i(TAG, "Cleanup complete. Removed $cleanupCount ghost accounts.")
+        } catch (e: SecurityException) {
+            Log.e(TAG, "SecurityException during legacy account cleanup: Permission might have been revoked mid-execution", e)
         } catch (e: Exception) {
             Log.e(TAG, "Error during legacy account cleanup", e)
         }
     }
 
-    /**
-     * Common logic to pack call metadata into a Bundle.
-     */
-    private fun createCallBundle(
-        callType: Int,
-        customStartTime: Long?,
-        durationSeconds: Long?,
-        mimicSimHandle: PhoneAccountHandle?,
-        features: Int,
-        autoAnswerDelay: Int = 0
-    ): Bundle = Bundle().apply {
-        putInt(EXTRA_CALL_TYPE, callType)
-        putParcelable(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, phoneAccountHandle)
-        
-        customStartTime?.let { putLong(EXTRA_CUSTOM_START_TIME, it) }
-        durationSeconds?.let { putLong(EXTRA_INTENDED_DURATION, it) }
-        mimicSimHandle?.let { putParcelable(EXTRA_MIMIC_SIM_HANDLE, it) }
-        
-        putInt(EXTRA_CALL_FEATURES, features)
-        putInt(EXTRA_AUTO_ANSWER_DELAY, autoAnswerDelay)
-    }
-
+    @SuppressLint("MissingPermission")
+    @RequiresPermission(Manifest.permission.READ_PHONE_STATE)
     suspend fun startIncomingCall(
         phoneNumber: String,
         callType: Int = CallLog.Calls.INCOMING_TYPE,
@@ -228,20 +223,41 @@ class TelecomHelper(private val context: Context) {
         features: Int = 0
     ) = withContext(Dispatchers.IO) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            CallStateManager.forceClearState(context)
+            if (telecomManager == null) {
+                Log.e(TAG, "startIncomingCall: Aborted - Telecom hardware absent")
+                return@withContext
+            }
 
-            val extras = createCallBundle(callType, customStartTime, durationSeconds, mimicSimHandle, features).apply {
+            val request = SimulatedCallRequest(
+                phoneNumber = phoneNumber,
+                direction = callType,
+                startTime = customStartTime,
+                duration = durationSeconds,
+                simHandle = mimicSimHandle,
+                features = features,
+                autoAnswerDelay = 0
+            )
+            
+            // Task 22: Atomic Metadata Injection
+            CallStateManager.setSimulatedCallActive(request)
+            
+            val extras = request.toBundle().apply {
+                putParcelable(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, phoneAccountHandle)
                 putParcelable(TelecomManager.EXTRA_INCOMING_CALL_ADDRESS, Uri.fromParts("tel", phoneNumber, null))
             }
             
             try {
                 telecomManager.addNewIncomingCall(phoneAccountHandle, extras)
             } catch (e: Exception) {
-                Log.e("TelecomHelper", "Failed to add incoming call", e)
+                Log.e(TAG, "Failed to add incoming call", e)
+                // Cleanup optimistic call on failure
+                CallStateManager.removeCall(request.alibiId)
             }
         }
     }
 
+    @SuppressLint("MissingPermission")
+    @RequiresPermission(Manifest.permission.CALL_PHONE)
     suspend fun startOutgoingCall(
         phoneNumber: String,
         autoAnswerDelay: Int = 0,
@@ -250,45 +266,77 @@ class TelecomHelper(private val context: Context) {
         mimicSimHandle: PhoneAccountHandle? = null,
         features: Int = 0
     ) = withContext(Dispatchers.IO) {
-        CallStateManager.forceClearState(context)
+        if (telecomManager == null) {
+            Log.e(TAG, "startOutgoingCall: Aborted - Telecom hardware absent")
+            return@withContext
+        }
 
-        val extras = createCallBundle(
-            CallLog.Calls.OUTGOING_TYPE, 
-            customStartTime, 
-            durationSeconds, 
-            mimicSimHandle, 
-            features, 
-            autoAnswerDelay
+        val request = SimulatedCallRequest(
+            phoneNumber = phoneNumber,
+            direction = CallLog.Calls.OUTGOING_TYPE,
+            startTime = customStartTime,
+            duration = durationSeconds,
+            simHandle = mimicSimHandle,
+            features = features,
+            autoAnswerDelay = autoAnswerDelay
         )
         
+        // Task 22: Atomic Metadata Injection
+        CallStateManager.setSimulatedCallActive(request)
+
+        val extras = request.toBundle().apply {
+            putParcelable(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, phoneAccountHandle)
+        }
+        
         // Duplicate for OEMs (Samsung/Pixel) that look in nested bundle
-        val outgoingExtras = Bundle(extras)
+        val outgoingExtras = Bundle().apply {
+            putParcelable(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, phoneAccountHandle)
+            putAll(request.toBundle())
+        }
         extras.putBundle(TelecomManager.EXTRA_OUTGOING_CALL_EXTRAS, outgoingExtras)
 
         val uri = Uri.fromParts("tel", phoneNumber, null)
         try {
-            if (ContextCompat.checkSelfPermission(context, Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED) {
+            if (hasPermission(Manifest.permission.CALL_PHONE)) {
                 Log.d(TAG, "Placing simulated outgoing call via: $SIMULATED_ACCOUNT_ID")
                 telecomManager.placeCall(uri, extras)
+            } else {
+                Log.e(TAG, "Missing CALL_PHONE permission for outgoing call")
+                // Cleanup optimistic call on permission failure
+                CallStateManager.removeCall(request.alibiId)
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to place outgoing call", e)
+            // Task 15: Cleanup optimistic call on failure
+            CallStateManager.removeCall(request.alibiId)
         }
     }
 
-    suspend fun placeRealCall(phoneNumber: String, simHandle: PhoneAccountHandle? = null) = withContext(Dispatchers.IO) {
+    @SuppressLint("MissingPermission")
+    @RequiresPermission(Manifest.permission.CALL_PHONE)
+    suspend fun placeRealCall(phoneNumber: String, simHandle: PhoneAccountHandle? = null, callId: String? = null) = withContext(Dispatchers.IO) {
+        if (telecomManager == null) {
+            Log.e(TAG, "placeRealCall: Aborted - Telecom hardware absent")
+            return@withContext
+        }
+
         val uri = Uri.fromParts("tel", phoneNumber, null)
         val extras = Bundle().apply {
-            if (simHandle != null) {
-                putParcelable(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, simHandle)
+            simHandle?.let {
+                putParcelable(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, it)
+            }
+            callId?.let {
+                putString(TelecomConstants.EXTRA_ALIBI_CALL_ID, it)
             }
         }
         try {
-            if (ContextCompat.checkSelfPermission(context, Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED) {
+            if (hasPermission(Manifest.permission.CALL_PHONE)) {
                 telecomManager.placeCall(uri, extras)
+            } else {
+                Log.e(TAG, "Missing CALL_PHONE permission for real call")
             }
         } catch (e: Exception) {
-            Log.e("TelecomHelper", "Failed to place real call", e)
+            Log.e(TAG, "Failed to place real call", e)
         }
     }
 

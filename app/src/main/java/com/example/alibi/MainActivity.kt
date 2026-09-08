@@ -10,26 +10,22 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.viewModels
 import androidx.compose.runtime.*
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.lifecycleScope
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.launch
-import kotlin.time.Duration.Companion.seconds
 import android.telecom.TelecomManager
 import androidx.navigation3.runtime.NavEntry
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.ui.NavDisplay
 import com.example.alibi.telecom.CallStateManager
-import com.example.alibi.telecom.TelecomHelper
 import com.example.alibi.ui.ActiveCallRoute
 import com.example.alibi.ui.MainTabScreen
 import com.example.alibi.ui.MainTabsRoute
+import com.example.alibi.ui.MainViewModel
+import com.example.alibi.ui.SystemStatus
 import com.example.alibi.ui.screens.ActiveCallScreen
 import com.example.alibi.ui.theme.AlibiTheme
 import com.example.alibi.util.RoleHelper
@@ -37,48 +33,33 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.app.role.RoleManager
 import android.content.pm.PackageManager
+import android.telecom.Call
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.delay
 
 class MainActivity : ComponentActivity() {
 
-    private val _systemStatus = MutableStateFlow(SystemStatus())
-    val systemStatus = _systemStatus.asStateFlow()
-
-    data class SystemStatus(
-        val isDialerRoleHeld: Boolean = false,
-        val isCallLogGranted: Boolean = false,
-        val isNotificationsGranted: Boolean = false,
-        val isPhonePermissionsGranted: Boolean = false,
-        val isRegistryWarmedUp: Boolean = false,
-        val isRepairing: Boolean = false
-    )
+    private val viewModel: MainViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         
-        // --- Smart System Reset ---
-        // Only wipe state if no call is active. This prevents the "Timer Chip" crash.
-        if (!CallStateManager.isBusy.value) {
-            CallStateManager.forceClearState(this)
-        }
-
         // CRITICAL: Pre-register the simulation account before any call attempts.
-        val telecomHelper = TelecomHelper(this)
-        lifecycleScope.launch {
-            telecomHelper.registerPhoneAccount()
-        }
+        viewModel.onTelecomInitialization()
 
-        val initialNumber = intent?.data?.schemeSpecificPart?.takeIf {
+        intent?.data?.schemeSpecificPart?.takeIf {
             intent.action == Intent.ACTION_DIAL || intent.action == Intent.ACTION_VIEW
+        }?.let { number ->
+            viewModel.onDeeplinkReceived(number)
         }
 
         setContent {
-            val status by systemStatus.collectAsStateWithLifecycle()
+            val status by viewModel.systemStatus.collectAsStateWithLifecycle()
             
             AppOnboarding(status) {
                 AlibiTheme {
-                    AlibiApp(initialNumber)
+                    AlibiApp()
                 }
             }
         }
@@ -86,8 +67,13 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        // Redirection handled by reactive navigation in AlibiApp
         setIntent(intent)
+        
+        intent.data?.schemeSpecificPart?.takeIf {
+            intent.action == Intent.ACTION_DIAL || intent.action == Intent.ACTION_VIEW
+        }?.let { number ->
+            viewModel.onDeeplinkReceived(number)
+        }
     }
 
     /**
@@ -97,53 +83,37 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun AppOnboarding(status: SystemStatus, content: @Composable () -> Unit) {
         val context = this
-        val scope = rememberCoroutineScope()
-        val telecomHelper = remember { TelecomHelper(context) }
         
         val roleLauncher = rememberLauncherForActivityResult(
             contract = ActivityResultContracts.StartActivityForResult()
         ) { 
             val isHeld = RoleHelper.isDialerRoleHeld(context)
-            _systemStatus.value = _systemStatus.value.copy(isDialerRoleHeld = isHeld)
-            if (isHeld) {
-                scope.launch { telecomHelper.cleanupLegacyAccounts() }
-            }
+            viewModel.updateRoleStatus(isHeld)
         }
 
         val phonePermissionsLauncher = rememberLauncherForActivityResult(
             contract = ActivityResultContracts.RequestMultiplePermissions()
         ) { results ->
             val isGranted = results.values.all { it }
-            _systemStatus.value = _systemStatus.value.copy(isPhonePermissionsGranted = isGranted)
-            // If granted, try a proactive registration
-            if (isGranted) {
-                scope.launch { telecomHelper.registerPhoneAccount() }
-            }
-            
-            // Final step: Dialer Role
-            if (!RoleHelper.isDialerRoleHeld(context)) {
-                requestDialerRole(context, roleLauncher)
-            }
+            viewModel.updatePhonePermissionsStatus(isGranted)
+        }
+
+        val contactsPermissionLauncher = rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.RequestPermission()
+        ) { isGranted ->
+            viewModel.updateContactsPermissionStatus(isGranted)
         }
 
         val callLogPermissionLauncher = rememberLauncherForActivityResult(
             contract = ActivityResultContracts.RequestPermission()
         ) { isGranted -> 
-            _systemStatus.value = _systemStatus.value.copy(isCallLogGranted = isGranted)
-            // Next step: Phone Permissions
-            val permissions = mutableListOf(Manifest.permission.READ_PHONE_STATE)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                permissions.add(Manifest.permission.READ_PHONE_NUMBERS)
-            }
-            phonePermissionsLauncher.launch(permissions.toTypedArray())
+            viewModel.updateCallLogPermissionStatus(isGranted)
         }
 
         val notificationPermissionLauncher = rememberLauncherForActivityResult(
             contract = ActivityResultContracts.RequestPermission()
         ) { isGranted ->
-            _systemStatus.value = _systemStatus.value.copy(isNotificationsGranted = isGranted)
-            // Next step: Call Log
-            callLogPermissionLauncher.launch(Manifest.permission.READ_CALL_LOG)
+            viewModel.updateNotificationsPermissionStatus(isGranted)
         }
 
         val lifecycleOwner = LocalLifecycleOwner.current
@@ -151,61 +121,60 @@ class MainActivity : ComponentActivity() {
 
         LaunchedEffect(lifecycleState) {
             if (lifecycleState == Lifecycle.State.RESUMED) {
-                val isRoleHeld = RoleHelper.isDialerRoleHeld(context)
-                val isCallLogGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALL_LOG) == PackageManager.PERMISSION_GRANTED
-                val isNotificationsGranted = if (Build.VERSION.SDK_INT >= 33) {
-                    ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
-                } else true
-                
-                val hasPhoneState = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED
-                val hasPhoneNumbers = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_NUMBERS) == PackageManager.PERMISSION_GRANTED
-                } else true
-                val isPhoneGranted = hasPhoneState && hasPhoneNumbers
-
-                // Real-time account verification
-                val isWarmedUp = telecomHelper.isAccountRegistered()
-
-                _systemStatus.value = SystemStatus(
-                    isDialerRoleHeld = isRoleHeld,
-                    isCallLogGranted = isCallLogGranted,
-                    isNotificationsGranted = isNotificationsGranted,
-                    isPhonePermissionsGranted = isPhoneGranted,
-                    isRegistryWarmedUp = isWarmedUp
-                )
-
-                if (isRoleHeld) {
-                    scope.launch { telecomHelper.cleanupLegacyAccounts() }
-                }
+                viewModel.refreshStatus()
             }
         }
 
-        // Start the permission chain
-        @SuppressLint("InlinedApi")
-        LaunchedEffect(Unit) {
-            val hasNotifications = if (Build.VERSION.SDK_INT >= 33) {
-                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
-            } else true
+        // Consolidate permission chain logic while preserving the reverse sequence.
+        LaunchedEffect(lifecycleState, status) {
+            if (lifecycleState != Lifecycle.State.RESUMED) return@LaunchedEffect
+            
+            val needsNotifications = Build.VERSION.SDK_INT >= 33 &&
+                    ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+            
+            val needsCallLog = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALL_LOG) != PackageManager.PERMISSION_GRANTED
+            
+            val needsContacts = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED
 
-            val hasCallLog = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALL_LOG) == PackageManager.PERMISSION_GRANTED
-            val hasPhoneState = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED
-            val hasPhoneNumbers = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_NUMBERS) == PackageManager.PERMISSION_GRANTED
-            } else true
-            val isRoleHeld = RoleHelper.isDialerRoleHeld(context)
+            val needsPhoneState = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED
+            val needsPhoneNumbers = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                    ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_NUMBERS) != PackageManager.PERMISSION_GRANTED
+            
+            val needsDialerRole = !RoleHelper.isDialerRoleHeld(context)
+
+            Log.d("Alibi_Onboarding", "Step Check - Notifications: $needsNotifications, CallLog: $needsCallLog, Contacts: $needsContacts, Phone: ${needsPhoneState || needsPhoneNumbers}, Role: $needsDialerRole")
 
             when {
-                !hasNotifications -> notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                !hasCallLog -> callLogPermissionLauncher.launch(Manifest.permission.READ_CALL_LOG)
-                !hasPhoneState || !hasPhoneNumbers -> {
+                needsNotifications -> {
+                    Log.d("Alibi_Onboarding", "Launching Notifications permission")
+                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
+                needsCallLog -> {
+                    Log.d("Alibi_Onboarding", "Launching Call Log permission")
+                    callLogPermissionLauncher.launch(Manifest.permission.READ_CALL_LOG)
+                }
+                needsContacts -> {
+                    Log.d("Alibi_Onboarding", "Launching Contacts permission")
+                    contactsPermissionLauncher.launch(Manifest.permission.READ_CONTACTS)
+                }
+                needsPhoneState || needsPhoneNumbers -> {
+                    Log.d("Alibi_Onboarding", "Launching Phone permissions")
                     val permissions = mutableListOf(Manifest.permission.READ_PHONE_STATE)
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                         permissions.add(Manifest.permission.READ_PHONE_NUMBERS)
                     }
                     phonePermissionsLauncher.launch(permissions.toTypedArray())
                 }
-                !isRoleHeld -> requestDialerRole(context, roleLauncher)
-                else -> scope.launch { telecomHelper.cleanupLegacyAccounts() }
+                needsDialerRole -> {
+                    Log.d("Alibi_Onboarding", "Requesting Dialer Role")
+                    requestDialerRole(context, roleLauncher)
+                }
+                else -> {
+                    if (!status.isLegacyCleanedUp) {
+                        Log.d("Alibi_Onboarding", "Onboarding complete. Cleaning up legacy.")
+                        viewModel.cleanupLegacy()
+                    }
+                }
             }
         }
 
@@ -215,22 +184,7 @@ class MainActivity : ComponentActivity() {
     }
 
     fun triggerRepair() {
-        val telecomHelper = TelecomHelper(this)
-        _systemStatus.value = _systemStatus.value.copy(isRepairing = true)
-        
-        lifecycleScope.launch {
-            // Heartbeat: Check registry every 1s for 15s
-            repeat(15) {
-                telecomHelper.registerPhoneAccount()
-                val isWarmed = telecomHelper.isAccountRegistered()
-                if (isWarmed) {
-                    _systemStatus.value = _systemStatus.value.copy(isRegistryWarmedUp = true, isRepairing = false)
-                    return@launch
-                }
-                delay(1.seconds)
-            }
-            _systemStatus.value = _systemStatus.value.copy(isRepairing = false)
-        }
+        viewModel.triggerRepair()
     }
 
     companion object {
@@ -257,25 +211,47 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun AlibiApp(initialNumber: String? = null) {
+fun AlibiApp() {
     val backStack = rememberNavBackStack(MainTabsRoute)
-    val currentCall by CallStateManager.currentCall.collectAsStateWithLifecycle()
-    val isSimulatedCallActive by CallStateManager.isSimulatedCallActive.collectAsStateWithLifecycle()
-    val simulatedPhoneNumber by CallStateManager.simulatedPhoneNumber.collectAsStateWithLifecycle()
+    val activeCalls by CallStateManager.activeCalls.collectAsStateWithLifecycle()
 
-    // Global navigation sync: If a call becomes active, force navigation to Call Screen
-    LaunchedEffect(currentCall, isSimulatedCallActive, simulatedPhoneNumber) {
-        val isActive = currentCall != null || isSimulatedCallActive
-        if (isActive) {
-            val phoneNumber = currentCall?.details?.handle?.schemeSpecificPart
-                ?: simulatedPhoneNumber
-                ?: "Unknown"
-            if (backStack.isEmpty() || backStack.last() !is ActiveCallRoute) {
-                backStack.add(ActiveCallRoute(phoneNumber))
+    // Global navigation sync: Navigate to Call Screen ONLY for DIALING, RINGING, or ACTIVE calls
+    LaunchedEffect(activeCalls) {
+        val callToShow = activeCalls.values.find {
+            it.state == android.telecom.Call.STATE_DIALING ||
+            it.state == android.telecom.Call.STATE_RINGING ||
+            it.state == android.telecom.Call.STATE_ACTIVE
+        }
+
+        if (callToShow != null) {
+            val callId = callToShow.id
+            if (callId.isNotBlank()) {
+                val currentRoute = backStack.lastOrNull()
+                if (currentRoute !is ActiveCallRoute || currentRoute.callId != callId) {
+                    if (currentRoute is ActiveCallRoute) {
+                        Log.d("AlibiApp", "Switching ActiveCallRoute from ${currentRoute.callId} to $callId")
+                        backStack.removeLastOrNull()
+                    } else {
+                        Log.d("AlibiApp", "Navigating to ActiveCallRoute for $callId")
+                    }
+                    backStack.add(ActiveCallRoute(callId))
+                }
             }
         } else {
-            if (backStack.isNotEmpty() && backStack.last() is ActiveCallRoute) {
-                backStack.removeLastOrNull()
+            // If the map becomes empty OR all calls are DISCONNECTED, return to MainTabsRoute
+            if (backStack.any { it is ActiveCallRoute }) {
+                // 100ms settling debounce to allow smooth call handoffs/preemption without navigation flickering
+                delay(100)
+                val recheckedCall = CallStateManager.activeCalls.value.values.find {
+                    it.state == Call.STATE_DIALING ||
+                    it.state == Call.STATE_RINGING ||
+                    it.state == Call.STATE_ACTIVE
+                }
+                if (recheckedCall == null && backStack.any { it is ActiveCallRoute }) {
+                    Log.d("AlibiApp", "No active calls detected after 100ms debounce. Clearing backstack to MainTabsRoute.")
+                    backStack.clear()
+                    backStack.add(MainTabsRoute)
+                }
             }
         }
     }
@@ -286,12 +262,14 @@ fun AlibiApp(initialNumber: String? = null) {
             when (key) {
                 is MainTabsRoute -> NavEntry(key) {
                     MainTabScreen(
-                        initialNumber = initialNumber,
-                        onNavigateToCall = { /* Handled by global effect */ }
+                        onNavigateToCall = { _ ->
+                            // Manual navigation from Setup/Dialer is now largely reactive
+                            // but we keep the callback for consistency if needed.
+                        }
                     )
                 } as NavEntry<NavKey>
                 is ActiveCallRoute -> NavEntry(key) {
-                    ActiveCallScreen(phoneNumber = key.phoneNumber)
+                    ActiveCallScreen(callId = key.callId)
                 } as NavEntry<NavKey>
                 else -> error("Unknown key: $key")
             }

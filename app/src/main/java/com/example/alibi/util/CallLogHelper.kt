@@ -5,23 +5,32 @@ import android.content.Context
 import android.annotation.SuppressLint
 import android.content.pm.PackageManager
 import android.database.ContentObserver
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.CallLog
 import android.util.Log
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.NonCancellable
 
 /**
  * Utility to interact with the system CallLog database.
  * Provides reactive flows and safe insertion methods.
  */
 class CallLogHelper private constructor(private val context: Context) {
+
+    private val helperScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     data class CallLogItem(
         val id: Long,
@@ -44,8 +53,9 @@ class CallLogHelper private constructor(private val context: Context) {
     fun getRecentCallsFlow(limit: Int = 500): Flow<List<CallLogItem>> = callbackFlow {
         val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
             override fun onChange(selfChange: Boolean) {
-                val calls = getRecentCalls(limit)
-                trySend(calls)
+                helperScope.launch {
+                    trySend(getRecentCalls(limit))
+                }
             }
         }
 
@@ -61,9 +71,6 @@ class CallLogHelper private constructor(private val context: Context) {
             trySend(emptyList())
         }
 
-        // Initial push
-        trySend(getRecentCalls(limit))
-
         awaitClose {
             try {
                 context.contentResolver.unregisterContentObserver(observer)
@@ -71,7 +78,13 @@ class CallLogHelper private constructor(private val context: Context) {
                 Log.e(TAG, "Error unregistering ContentObserver", e)
             }
         }
-    }.onStart { emit(getRecentCalls(limit)) }
+    }
+    .onStart { 
+        // Bug 28: Ensure early collectors get data immediately on IO thread
+        emit(getRecentCalls(limit)) 
+    }
+    .flowOn(Dispatchers.IO)
+    .conflate()
 
     /**
      * Fetches the recent calls from the system database.
@@ -94,36 +107,30 @@ class CallLogHelper private constructor(private val context: Context) {
             )
 
             cursor?.use {
-                val idIdx = it.getColumnIndex(CallLog.Calls._ID)
-                val numIdx = it.getColumnIndex(CallLog.Calls.NUMBER)
-                val typeIdx = it.getColumnIndex(CallLog.Calls.TYPE)
-                val dateIdx = it.getColumnIndex(CallLog.Calls.DATE)
-                val durIdx = it.getColumnIndex(CallLog.Calls.DURATION)
-                val nameIdx = it.getColumnIndex(CallLog.Calls.CACHED_NAME)
-                val formatIdx = it.getColumnIndex(CallLog.Calls.CACHED_FORMATTED_NUMBER)
-                val numTypeIdx = it.getColumnIndex(CallLog.Calls.CACHED_NUMBER_TYPE)
-                val featIdx = it.getColumnIndex(CallLog.Calls.FEATURES)
-                val accIdx = it.getColumnIndex(CallLog.Calls.PHONE_ACCOUNT_ID)
-                val compIdx = it.getColumnIndex(CallLog.Calls.PHONE_ACCOUNT_COMPONENT_NAME)
-
                 var count = 0
                 while (it.moveToNext() && (count < limit)) {
-                    val rawNumber = it.getString(numIdx)
-                    val cachedFormat = if (formatIdx != -1) it.getString(formatIdx) else null
+                    val rawNumber = it.getStringSafe(CallLog.Calls.NUMBER)
+                    val cachedFormat = it.getStringSafe(CallLog.Calls.CACHED_FORMATTED_NUMBER)
                     
+                    // Bug 29: Harden number resolution to prevent "Unknown" pollution
+                    val resolvedNumber = rawNumber 
+                        ?: cachedFormat 
+                        ?: it.getStringSafe(CallLog.Calls.CACHED_NAME) 
+                        ?: "Unknown"
+
                     list.add(
                         CallLogItem(
-                            id = it.getLong(idIdx),
-                            number = rawNumber ?: cachedFormat ?: "Unknown",
-                            type = it.getInt(typeIdx),
-                            date = it.getLong(dateIdx),
-                            duration = it.getLong(durIdx),
-                            name = if (nameIdx != -1) it.getString(nameIdx) else null,
+                            id = it.getLongSafe(CallLog.Calls._ID),
+                            number = resolvedNumber,
+                            type = it.getIntSafe(CallLog.Calls.TYPE),
+                            date = it.getLongSafe(CallLog.Calls.DATE),
+                            duration = it.getLongSafe(CallLog.Calls.DURATION),
+                            name = it.getStringSafe(CallLog.Calls.CACHED_NAME),
                             formattedNumber = cachedFormat,
-                            numberType = if (numTypeIdx != -1) it.getInt(numTypeIdx) else 0,
-                            features = if (featIdx != -1) it.getInt(featIdx) else 0,
-                            phoneAccountId = if (accIdx != -1) it.getString(accIdx) else null,
-                            phoneAccountComponent = if (compIdx != -1) it.getString(compIdx) else null
+                            numberType = it.getIntSafe(CallLog.Calls.CACHED_NUMBER_TYPE),
+                            features = it.getIntSafe(CallLog.Calls.FEATURES),
+                            phoneAccountId = it.getStringSafe(CallLog.Calls.PHONE_ACCOUNT_ID),
+                            phoneAccountComponent = it.getStringSafe(CallLog.Calls.PHONE_ACCOUNT_COMPONENT_NAME)
                         )
                     )
                     count++
@@ -136,7 +143,9 @@ class CallLogHelper private constructor(private val context: Context) {
     }
 
     /**
-     * Inserts a call record into the system call log.
+     * Inserts a call record into the system call log using a Universal Version-Safe strategy.
+     * 1. Android 14+ (API 34) uses enhanced metadata (NEW, IS_READ, NUMBER_PRESENTATION).
+     * 2. Versions below API 34 or failures use a "Pure Minimalist" fallback (NUMBER, DATE, DURATION, TYPE).
      */
     suspend fun insertCallLog(
         phoneNumber: String,
@@ -145,26 +154,68 @@ class CallLogHelper private constructor(private val context: Context) {
         callType: Int,
         simHandle: android.telecom.PhoneAccountHandle? = null,
         features: Int = 0
-    ) = withContext(Dispatchers.IO) {
+    ) = withContext(Dispatchers.IO + NonCancellable) {
+        val sanitizedNumber = phoneNumber.trim().takeIf { it.isNotEmpty() } ?: "Unknown"
+        val sanitizedDate = if (timestamp > 0) timestamp else System.currentTimeMillis()
+
+        Log.d(TAG, "insertCallLog: Starting Universal Version-Safe insertion for $sanitizedNumber")
+
+        // Try Enhanced Insertion if API 34+
+        if (Build.VERSION.SDK_INT >= 34) {
+            try {
+                val enhancedValues = ContentValues().apply {
+                    put(CallLog.Calls.NUMBER, sanitizedNumber)
+                    put(CallLog.Calls.DATE, sanitizedDate)
+                    put(CallLog.Calls.DURATION, duration)
+                    put(CallLog.Calls.TYPE, callType)
+                    put(CallLog.Calls.NEW, 1)
+                    put(CallLog.Calls.IS_READ, 0)
+                    put(CallLog.Calls.NUMBER_PRESENTATION, CallLog.Calls.PRESENTATION_ALLOWED)
+
+                    if (features != 0) {
+                        put(CallLog.Calls.FEATURES, features)
+                    }
+                    // Bug 25: Safely handle null componentName
+                    simHandle?.let { handle ->
+                        handle.componentName?.let { comp ->
+                            put(CallLog.Calls.PHONE_ACCOUNT_COMPONENT_NAME, comp.flattenToString())
+                        }
+                        put(CallLog.Calls.PHONE_ACCOUNT_ID, handle.id)
+                    }
+                }
+                
+                val uri = context.contentResolver.insert(CallLog.Calls.CONTENT_URI, enhancedValues)
+                if (uri != null) {
+                    Log.d(TAG, "Enhanced insertion success: $uri")
+                    context.contentResolver.notifyChange(CallLog.Calls.CONTENT_URI, null)
+                    return@withContext
+                }
+                Log.w(TAG, "Enhanced insertion returned null, retrying with minimalist...")
+            } catch (e: Throwable) {
+                Log.e(TAG, "Enhanced insertion failed: ${e.message}. Falling back to minimalist.", e)
+            }
+        }
+
+        // Fallback: Pure Minimalist Set (Ensures log is saved even if schema is unexpected)
         try {
-            val values = ContentValues().apply {
-                put(CallLog.Calls.NUMBER, phoneNumber)
-                put(CallLog.Calls.DATE, timestamp)
+            val minimalistValues = ContentValues().apply {
+                put(CallLog.Calls.NUMBER, sanitizedNumber)
+                put(CallLog.Calls.DATE, sanitizedDate)
                 put(CallLog.Calls.DURATION, duration)
                 put(CallLog.Calls.TYPE, callType)
-                put(CallLog.Calls.NEW, 1)
-                put(CallLog.Calls.FEATURES, features)
-                
-                if (simHandle != null) {
-                    put(CallLog.Calls.PHONE_ACCOUNT_COMPONENT_NAME, simHandle.componentName.flattenToString())
-                    put(CallLog.Calls.PHONE_ACCOUNT_ID, simHandle.id)
-                }
             }
-
-            val uri = context.contentResolver.insert(CallLog.Calls.CONTENT_URI, values)
-            Log.d(TAG, "Call log inserted successfully: $uri")
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to insert call log", e)
+            
+            val uri = context.contentResolver.insert(CallLog.Calls.CONTENT_URI, minimalistValues)
+            if (uri != null) {
+                Log.d(TAG, "Minimalist insertion success: $uri")
+            } else {
+                Log.e(TAG, "Minimalist insertion failed: ContentResolver returned null")
+            }
+        } catch (e: Throwable) {
+            Log.e(TAG, "Critical failure in minimalist insertion fallback", e)
+        } finally {
+            // Always notify change to ensure UI refreshes
+            context.contentResolver.notifyChange(CallLog.Calls.CONTENT_URI, null)
         }
     }
 

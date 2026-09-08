@@ -2,176 +2,206 @@ package com.example.alibi.service
 
 import android.content.Context
 import android.content.Intent
+import android.os.Build
+import android.os.Bundle
+import android.os.PowerManager
+import android.telecom.Call
 import android.telecom.Connection
 import android.telecom.DisconnectCause
 import android.telecom.PhoneAccountHandle
+import android.telecom.TelecomManager
 import android.util.Log
 import androidx.core.content.ContextCompat
+import com.example.alibi.telecom.CallLogSnapshot
 import com.example.alibi.telecom.CallStateManager
+import com.example.alibi.telecom.SimulatedCallRequest
+import com.example.alibi.telecom.TelecomConstants
 import kotlinx.coroutines.*
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Custom [Connection] for simulated calls.
- * Manages local metadata to ensure accurate logging even if global state is reset.
+ * Task 18: Refactored to delegate logic to SimulationController.
  */
-class SimulatedConnection(private val context: Context) : Connection() {
+class SimulatedConnection(
+    val context: Context,
+    val request: SimulatedCallRequest
+) : Connection() {
 
+    val connectionId = request.alibiId
     private val connectionScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private val isDestroyed = AtomicBoolean(false)
-    private var durationJob: Job? = null
+    private var wakeLock: PowerManager.WakeLock? = null
 
     // Captured metadata for atomic logging
-    private var localPhoneNumber: String? = null
-    private var localStartTime: Long = 0L
-    private var localAnswerTime: Long = 0L
-    private var localCallType: Int = android.provider.CallLog.Calls.INCOMING_TYPE
-    private var localIntendedDuration: Long? = null
-    private var localMimicSimHandle: PhoneAccountHandle? = null
-    private var localCallFeatures: Int = 0
+    internal var localAnswerTime: Long = 0L
 
     init {
+        Log.d(TAG, "Initializing SimulatedConnection: $connectionId")
+        
+        // Reliability Enhancement: Acquire WakeLock to prevent CPU sleep during call
+        try {
+            val powerManager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+            wakeLock = powerManager?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Alibi:SimulatedCall:$connectionId")
+            wakeLock?.acquire(10 * 60 * 60 * 1000L /* 10 hours max safety timeout */)
+            Log.d(TAG, "WakeLock acquired for $connectionId")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to acquire WakeLock", e)
+        }
+
         connectionCapabilities = CAPABILITY_SUPPORT_HOLD or CAPABILITY_HOLD
         audioModeIsVoip = true
         
-        CallStateManager.onDisconnectRequested = { onDisconnect() }
-        CallStateManager.onAnswerRequested = { onAnswer() }
-    }
+        setInitializing()
+        setAddress(android.net.Uri.fromParts("tel", request.phoneNumber, null), TelecomManager.PRESENTATION_ALLOWED)
+        
+        val ex = extras ?: Bundle()
+        ex.putString(TelecomConstants.EXTRA_CONNECTION_ID, connectionId)
+        ex.putString(TelecomConstants.EXTRA_ALIBI_CALL_ID, connectionId)
+        setExtras(ex)
 
-    fun setMetadata(
-        number: String?,
-        startTime: Long,
-        type: Int,
-        duration: Long?,
-        sim: PhoneAccountHandle?,
-        features: Int
-    ) {
-        localPhoneNumber = number
-        localStartTime = startTime
-        localCallType = type
-        localIntendedDuration = duration
-        localMimicSimHandle = sim
-        localCallFeatures = features
-    }
-
-    fun setAutoAnswerDelay(seconds: Int) {
-        if (seconds < 0) return
-        connectionScope.launch {
-            delay(if (seconds > 0) seconds.seconds else 500.milliseconds)
-            if (state != STATE_ACTIVE && state != STATE_DISCONNECTED) {
-                onAnswer()
-            }
+        CallStateManager.registerConnection(connectionId, this)
+        
+        if (request.direction == android.provider.CallLog.Calls.OUTGOING_TYPE) {
+            setDialing()
+            AudioHeartbeatManager.getInstance(context).start()
+        } else {
+            setRinging()
         }
-    }
 
-    fun setAutoMissDelay(seconds: Int) {
-        if (seconds <= 0) return
-        connectionScope.launch {
-            delay(seconds.seconds)
-            if (state == STATE_RINGING) {
-                onReject()
-            }
-        }
+        SimulationController.registerConnection(connectionId, this)
+        updateNotification()
+
+        CallStateManager.setAudioHandlers(
+            mute = { muted ->
+                CallStateManager.updateAudioState(muted, CallStateManager.isSpeakerOn.value)
+            },
+            speaker = { speakerOn ->
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    val route = if (speakerOn) android.telecom.CallAudioState.ROUTE_SPEAKER else android.telecom.CallAudioState.ROUTE_EARPIECE
+                    @Suppress("DEPRECATION")
+                    setAudioRoute(route)
+                }
+            },
+            priority = false
+        )
+
+        AudioHeartbeatManager.getInstance(context).connection = this
     }
 
     override fun onAnswer() {
-        Log.d(TAG, "onAnswer")
-        if (state != STATE_ACTIVE) {
-            setActive()
-            localAnswerTime = System.currentTimeMillis()
-            
-            // Start automatic hang-up timer if duration is set
-            localIntendedDuration?.takeIf { it > 0 }?.let { duration ->
-                durationJob?.cancel()
-                durationJob = connectionScope.launch {
-                    Log.d(TAG, "Starting automatic hang-up timer: $duration seconds")
-                    delay(duration.seconds)
-                    Log.d(TAG, "Intended duration reached. Automatically hanging up.")
-                    onDisconnect()
-                }
-            }
-
-            CallStateManager.setSimulatedCallActive(true, address?.schemeSpecificPart)
-            
-            val intent = Intent(context, CallNotificationService::class.java).apply {
-                putExtra(CallNotificationService.EXTRA_PHONE_NUMBER, address?.schemeSpecificPart)
-                putExtra(CallNotificationService.EXTRA_IS_INCOMING, false)
-                putExtra(CallNotificationService.EXTRA_IS_MISSED, false)
-                putExtra(CallNotificationService.EXTRA_IS_DIALING, false)
-                putExtra(CallNotificationService.EXTRA_IS_SIMULATED, true)
-                putExtra(CallNotificationService.EXTRA_START_TIME, localAnswerTime)
-            }
-            ContextCompat.startForegroundService(context, intent)
-        }
+        Log.d(TAG, "onAnswer requested for $connectionId")
+        localAnswerTime = System.currentTimeMillis()
+        SimulationController.answerSimulatedCall(connectionId)
+        updateNotification()
     }
 
     override fun onReject() {
-        Log.d(TAG, "onReject")
-        setDisconnected(DisconnectCause(DisconnectCause.REJECTED))
-        cleanup()
+        Log.d(TAG, "onReject for $connectionId")
+        terminate(userInitiated = true, cause = DisconnectCause.REJECTED)
     }
 
     override fun onDisconnect() {
-        Log.d(TAG, "onDisconnect")
-        setDisconnected(DisconnectCause(DisconnectCause.LOCAL))
-        cleanup()
+        Log.d(TAG, "onDisconnect for $connectionId")
+        terminate(userInitiated = true, cause = DisconnectCause.LOCAL)
     }
 
     override fun onAbort() {
-        Log.d(TAG, "onAbort")
-        setDisconnected(DisconnectCause(DisconnectCause.CANCELED))
-        cleanup()
+        Log.d(TAG, "onAbort for $connectionId")
+        terminate(userInitiated = true, cause = DisconnectCause.CANCELED)
     }
 
-    private fun cleanup() {
+    override fun onHold() {
+        Log.d(TAG, "onHold received for $connectionId")
+        SimulationController.holdSimulatedCall(connectionId, true)
+        updateNotification()
+    }
+
+    override fun onUnhold() {
+        Log.d(TAG, "onUnhold received for $connectionId")
+        SimulationController.holdSimulatedCall(connectionId, false)
+        updateNotification()
+    }
+
+    fun setUnhold() = onUnhold()
+
+    fun terminate(userInitiated: Boolean, cause: Int = DisconnectCause.LOCAL) {
+        if (isDestroyed.get()) return
+        val now = System.currentTimeMillis()
+        Log.d(TAG, "[$now] terminate: $connectionId, userInitiated=$userInitiated")
+        
+        // Task 20: Trigger logging BEFORE any state removal or cleanup
+        SimulationController.triggerLogging(connectionId, userInitiated)
+        
+        setDisconnected(DisconnectCause(cause))
+        cleanup(userInitiated)
+    }
+
+    private fun cleanup(isUserTerminated: Boolean) {
         if (isDestroyed.getAndSet(true)) return
-        durationJob?.cancel()
-        durationJob = null
+        
+        val now = System.currentTimeMillis()
+        Log.d(TAG, "[$now] Cleanup initiated for connection: $connectionId")
 
-        // CRITICAL: Immediately detach from singleton to prevent capture leaks
-        // and ensure we don't handle any more requests during teardown.
-        if (CallStateManager.onDisconnectRequested?.let { it.javaClass.enclosingClass == this.javaClass } == true) {
-            CallStateManager.onDisconnectRequested = null
-        }
-        if (CallStateManager.onAnswerRequested?.let { it.javaClass.enclosingClass == this.javaClass } == true) {
-            CallStateManager.onAnswerRequested = null
-        }
+        SimulationController.unregisterConnection(connectionId)
+        
+        AudioHeartbeatManager.getInstance(context).connection = null
+        // Heartbeat is now managed by AudioPolicyManager via CallRepository
 
-        connectionScope.launch {
-            try {
-                // Ensure atomic log write before state wipe
-                localPhoneNumber?.let { number ->
-                    CallStateManager.terminateSimulatedSession(
-                        context = context,
-                        phoneNumber = number,
-                        startTime = if (localStartTime > 0) localStartTime else System.currentTimeMillis(),
-                        answerTime = localAnswerTime,
-                        callType = localCallType,
-                        intendedDuration = localIntendedDuration,
-                        simHandle = localMimicSimHandle,
-                        features = localCallFeatures
-                    )
-                } ?: CallStateManager.forceClearState(context)
+        CallStateManager.unregisterConnection(connectionId)
+        CallStateManager.clearAudioHandlers(priority = false) 
 
-                // Give logs a tiny breath to flush to disk/db
-                delay(100.milliseconds)
-            } finally {
-                context.stopService(Intent(context, CallNotificationService::class.java))
-                destroy()
-                connectionScope.cancel()
+        // Release WakeLock
+        try {
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
+                Log.d(TAG, "WakeLock released for $connectionId")
             }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error releasing WakeLock", e)
         }
+        wakeLock = null
+
+        CoroutineScope(Dispatchers.IO).launch {
+            destroy()
+        }
+        connectionScope.cancel()
     }
 
-    override fun onHold() = setOnHold()
-    override fun onUnhold() = setActive()
+    override fun onMuteStateChanged(isMuted: Boolean) {
+        CallStateManager.updateAudioState(isMuted, CallStateManager.isSpeakerOn.value)
+    }
 
+    @Suppress("unused", "DEPRECATION")
     @Deprecated("Deprecated in Java")
     override fun onCallAudioStateChanged(state: android.telecom.CallAudioState?) {
         state?.let {
             CallStateManager.updateAudioState(it.isMuted, it.route == android.telecom.CallAudioState.ROUTE_SPEAKER)
+        }
+    }
+
+    private fun updateNotification() {
+        val calls = CallStateManager.activeCalls.value
+        val metadata = calls[connectionId]
+        val phase = metadata?.phase
+        val isDialingPhase = phase == com.example.alibi.telecom.SimulationPhase.DIALING || 
+                           phase == com.example.alibi.telecom.SimulationPhase.RINGING
+
+        val managerAnswerTime = metadata?.answerTime ?: 0L
+        val finalStartTime = if (managerAnswerTime > 0L) managerAnswerTime else if (localAnswerTime > 0L) localAnswerTime else 0L
+
+        val intent = Intent(context, CallNotificationService::class.java).apply {
+            putExtra(TelecomConstants.EXTRA_CALL_ID, connectionId)
+            putExtra(TelecomConstants.EXTRA_PHONE_NUMBER, request.phoneNumber)
+            putExtra(TelecomConstants.EXTRA_IS_INCOMING, state == STATE_RINGING || phase == com.example.alibi.telecom.SimulationPhase.RINGING)
+            putExtra(TelecomConstants.EXTRA_IS_DIALING, state == STATE_DIALING || state == STATE_INITIALIZING || isDialingPhase)
+            putExtra(TelecomConstants.EXTRA_IS_SIMULATED, true)
+            if (finalStartTime > 0L) putExtra(TelecomConstants.EXTRA_START_TIME, finalStartTime)
+        }
+        try {
+            ContextCompat.startForegroundService(context, intent)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start CallNotificationService", e)
         }
     }
 

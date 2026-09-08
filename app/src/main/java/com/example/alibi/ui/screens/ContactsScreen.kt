@@ -19,6 +19,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import android.content.pm.PackageManager
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.alibi.util.ContactsHelper
+import com.example.alibi.MainActivity
 
 data class ContactItem(val name: String, val number: String)
 
@@ -28,42 +31,33 @@ fun ContactsScreen(
     onContactClick: (String) -> Unit
 ) {
     val context = LocalContext.current
-    val contacts = remember { mutableStateListOf<ContactItem>() }
-    var hasPermission by remember { 
-        mutableStateOf(ContextCompat.checkSelfPermission(context, android.Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED)
-    }
+    val contactsHelper = remember { ContactsHelper(context) }
+    val systemStatus = MainActivity.LocalSystemStatus.current
+    
+    val hasPermission = systemStatus.isContactsPermissionGranted
 
-    LaunchedEffect(hasPermission) {
-        if (hasPermission) {
-            val list = mutableListOf<ContactItem>()
-            val cursor = context.contentResolver.query(
-                ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
-                arrayOf(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME, ContactsContract.CommonDataKinds.Phone.NUMBER),
-                null,
-                null,
-                ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + " ASC"
-            )
-            cursor?.use {
-                val nameIdx = it.getColumnIndex(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)
-                val numIdx = it.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER)
-                while (it.moveToNext()) {
-                    list.add(ContactItem(it.getString(nameIdx), it.getString(numIdx)))
-                }
-            }
-            contacts.clear()
-            contacts.addAll(list)
-        }
-    }
-
-    val filteredContacts = if (searchQuery.isEmpty()) {
-        contacts
+    val contacts by if (hasPermission) {
+        contactsHelper.getContactsFlow().collectAsStateWithLifecycle(initialValue = null)
     } else {
-        contacts.filter { it.name.contains(searchQuery, ignoreCase = true) || it.number.contains(searchQuery) }
+        remember { mutableStateOf(emptyList<ContactItem>()) }
+    }
+
+    val filteredContacts = remember(searchQuery, contacts) {
+        val list = contacts ?: emptyList()
+        if (searchQuery.isEmpty()) {
+            list
+        } else {
+            list.filter { it.name.contains(searchQuery, ignoreCase = true) || it.number.contains(searchQuery) }
+        }
     }
 
     if (!hasPermission) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text("Grant Contact Permission to view contacts")
+        }
+    } else if (contacts == null) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator()
         }
     } else {
         LazyColumn(modifier = Modifier.fillMaxSize()) {

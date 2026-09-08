@@ -7,4 +7,8 @@ import kotlinx.serialization.Serializable
 data object MainTabsRoute : NavKey
 
 @Serializable
-data class ActiveCallRoute(val phoneNumber: String) : NavKey
+data class ActiveCallRoute(val callId: String) : NavKey {
+    init {
+        require(callId.isNotBlank()) { "ActiveCallRoute requires a non-blank callId" }
+    }
+}
