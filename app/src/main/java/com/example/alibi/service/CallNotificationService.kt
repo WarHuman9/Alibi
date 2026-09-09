@@ -60,12 +60,16 @@ class CallNotificationService : Service() {
         // Unified Primary Strategy: Start foreground immediately with the Primary ID (101).
         // This ID will be updated with actual call data as soon as it's available.
         val bootstrap = notificationFactory.createBootstrapNotification(CHANNEL_ID)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIFICATION_ID, bootstrap, ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL)
-        } else {
-            startForeground(NOTIFICATION_ID, bootstrap)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(NOTIFICATION_ID, bootstrap, ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL)
+            } else {
+                startForeground(NOTIFICATION_ID, bootstrap)
+            }
+            Log.d(TelecomConstants.NOTIFICATION_TAG, "Bootstrap foreground started with ID $NOTIFICATION_ID.")
+        } catch (e: Exception) {
+            Log.e(TelecomConstants.NOTIFICATION_TAG, "Failed to start bootstrap foreground service", e)
         }
-        Log.d(TelecomConstants.NOTIFICATION_TAG, "Bootstrap foreground started with ID $NOTIFICATION_ID.")
 
         val powerManager = getSystemService(POWER_SERVICE) as PowerManager
         wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, TelecomConstants.WAKE_LOCK_TAG).apply {
@@ -464,10 +468,15 @@ class CallNotificationService : Service() {
         foregroundCallId = callId
         Log.d(TelecomConstants.NOTIFICATION_TAG, "Updating Primary Foreground (ID $NOTIFICATION_ID) for call $callId")
         
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL)
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL)
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+        } catch (e: Exception) {
+            Log.e(TelecomConstants.NOTIFICATION_TAG, "Failed to update foreground service, falling back to NotificationManager.notify", e)
+            notificationManager.notify(NOTIFICATION_ID, notification)
         }
     }
 
