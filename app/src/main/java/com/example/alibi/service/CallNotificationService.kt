@@ -282,7 +282,7 @@ class CallNotificationService : Service() {
                 else -> false
             }
 
-            val channelId = if (isSimulated) CHANNEL_ID_SILENT else CHANNEL_ID
+            val channelId = if (isIncoming && !isMissed && !isDialing) CHANNEL_ID_INCOMING else CHANNEL_ID
             val notification = notificationFactory.createNotification(
                 phoneNumber = phoneNumber,
                 name = name,
@@ -490,21 +490,32 @@ class CallNotificationService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val manager = getSystemService(NotificationManager::class.java)
             
-            val activeChannel = NotificationChannel(CHANNEL_ID, "Active Calls", NotificationManager.IMPORTANCE_HIGH).apply {
-                description = "Notifications for active calls"
+            // Clean up legacy channels so Android system settings adopt the new channel importance rules
+            try {
+                manager.deleteNotificationChannel("call_channel")
+                manager.deleteNotificationChannel("call_channel_silent")
+            } catch (_: Exception) {}
+
+            // Ongoing & Outgoing Calls Channel (IMPORTANCE_LOW -> Shade only, NO heads-up banner)
+            val ongoingChannel = NotificationChannel(CHANNEL_ID, "Ongoing & Outgoing Calls", NotificationManager.IMPORTANCE_LOW).apply {
+                description = "Notifications for ongoing and outgoing calls"
                 setSound(null, null)
                 enableLights(false)
                 enableVibration(false)
+                setShowBadge(false)
                 lockscreenVisibility = Notification.VISIBILITY_PUBLIC
             }
-            manager.createNotificationChannel(activeChannel)
+            manager.createNotificationChannel(ongoingChannel)
 
-            val silentChannel = NotificationChannel(CHANNEL_ID_SILENT, "Simulated Calls (Standard)", NotificationManager.IMPORTANCE_HIGH).apply {
-                description = "Standard notifications for simulated calls"
+            // Incoming Calls Channel (IMPORTANCE_HIGH -> Heads-up alert banner)
+            val incomingChannel = NotificationChannel(CHANNEL_ID_INCOMING, "Incoming Calls", NotificationManager.IMPORTANCE_HIGH).apply {
+                description = "Notifications for incoming calls"
                 setSound(null, null)
-                setShowBadge(false)
+                enableLights(true)
+                enableVibration(true)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
             }
-            manager.createNotificationChannel(silentChannel)
+            manager.createNotificationChannel(incomingChannel)
         }
     }
 
@@ -548,8 +559,9 @@ class CallNotificationService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     companion object {
-        private const val CHANNEL_ID = "call_channel"
-        private const val CHANNEL_ID_SILENT = "call_channel_silent"
+        private const val CHANNEL_ID = "call_channel_ongoing_v2"
+        private const val CHANNEL_ID_INCOMING = "call_channel_incoming_v2"
+        private const val CHANNEL_ID_SILENT = "call_channel_ongoing_v2"
         private const val NOTIFICATION_ID = 101
     }
 }

@@ -12,6 +12,7 @@ import androidx.compose.material3.*
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
 import androidx.window.core.layout.WindowSizeClass
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
@@ -23,9 +24,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.alibi.telecom.CallStateManager
 import com.example.alibi.telecom.SimulationPhase
 import com.example.alibi.ui.components.*
-import androidx.compose.runtime.saveable.rememberSaveable
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.firstOrNull
 import java.util.Locale
 import kotlin.time.Duration.Companion.seconds
 
@@ -40,73 +39,27 @@ fun ActiveCallScreen(
     val isMuted by CallStateManager.isMuted.collectAsStateWithLifecycle()
     val speakerOn by CallStateManager.isSpeakerOn.collectAsStateWithLifecycle()
     
-    if (callInfo == null) {
-        // Diagnostic timeout guard: log warning only if dead route persists for > 1500ms without cleanup
-        LaunchedEffect(callId) {
-            delay(1500)
-            if (CallStateManager.getCallMetadata(callId).firstOrNull() == null) {
-                Log.d("Alibi_UI", "ActiveCallScreen: Dead route $callId retained past 1500ms transition window.")
-            }
+    // Remember saveable properties for smooth transitions and configuration change safety
+    var lastPhoneNumber by rememberSaveable { mutableStateOf("") }
+    var lastDurationText by rememberSaveable { mutableStateOf("00:00") }
+
+    if (callInfo != null) {
+        val num = callInfo!!.number
+        if (num.isNotBlank()) {
+            lastPhoneNumber = num
         }
-
-        // Exact ActiveCallScreen theme and layout matching "Call Ended" state
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.verticalGradient(
-                        colors = listOf(
-                            MaterialTheme.colorScheme.surface,
-                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
-                        )
-                    )
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
-            ) {
-                Surface(
-                    modifier = Modifier.size(100.dp),
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.primaryContainer,
-                    tonalElevation = 8.dp
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Call,
-                        contentDescription = null,
-                        modifier = Modifier
-                            .padding(24.dp)
-                            .fillMaxSize(),
-                        tint = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(32.dp))
-
-                Text(
-                    text = "Call Ended",
-                    style = MaterialTheme.typography.titleMedium.copy(
-                        fontWeight = FontWeight.Light
-                    ),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-        return
     }
-    
-    val callState = callInfo!!.state
-    val simulationPhase = callInfo!!.phase
-    val isHolding = callInfo!!.isHolding
-    
+
+    val callState = callInfo?.state ?: Call.STATE_DISCONNECTED
+    val simulationPhase = callInfo?.phase ?: SimulationPhase.IDLE
+    val isHolding = callInfo?.isHolding ?: false
+    val displayPhoneNumber = callInfo?.number?.takeIf { it.isNotBlank() } ?: lastPhoneNumber
+    val answerTime = callInfo?.answerTime ?: 0L
+
     LaunchedEffect(callState, simulationPhase) {
-        android.util.Log.d("Alibi_UI", "Screen received state change: callId=$callId, callState=$callState, phase=$simulationPhase, isHolding=$isHolding")
+        Log.d("Alibi_UI", "Screen received state change: callId=$callId, callState=$callState, phase=$simulationPhase, isHolding=$isHolding")
     }
-    
-    val displayPhoneNumber = callInfo!!.number
-    val answerTime = callInfo!!.answerTime
+
     var durationSeconds by remember { mutableLongStateOf(0L) }
     
     val windowAdaptiveInfo = currentWindowAdaptiveInfo()
@@ -138,12 +91,10 @@ fun ActiveCallScreen(
 
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
 
-    // Android 10 compatible observable locale
     val configuration = LocalConfiguration.current
     val locale = configuration.locales[0]
     val timeText = String.format(locale, "%02d:%02d", durationSeconds / 60, durationSeconds % 60)
 
-    var lastDurationText by rememberSaveable { mutableStateOf("00:00") }
     if (durationSeconds > 0) {
         lastDurationText = timeText
     }
@@ -197,7 +148,7 @@ fun ActiveCallScreen(
                     }
                     Surface(
                         modifier = Modifier.size(if (isExpanded) 150.dp else 100.dp),
-                        shape = androidx.compose.foundation.shape.CircleShape,
+                        shape = CircleShape,
                         color = MaterialTheme.colorScheme.primaryContainer,
                         tonalElevation = 8.dp
                     ) {

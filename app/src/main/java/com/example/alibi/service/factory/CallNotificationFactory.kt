@@ -53,6 +53,7 @@ class CallNotificationFactory(private val context: Context) {
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(Notification.CATEGORY_SERVICE)
             .setOngoing(true)
+            .setOnlyAlertOnce(true)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .build()
     }
@@ -131,7 +132,8 @@ class CallNotificationFactory(private val context: Context) {
         // For non-primary calls, we use a standard notification with action buttons.
         val useCallStyle = isPrimary && (isRinging || isActive)
 
-        if (useCallStyle && canUseFullScreenIntent()) {
+        // Only push FullScreenIntent / Heads-up alert for Incoming Ringing Calls
+        if (isPrimary && isRinging && canUseFullScreenIntent()) {
             builder.setFullScreenIntent(pendingIntent, true)
         }
 
@@ -219,7 +221,7 @@ class CallNotificationFactory(private val context: Context) {
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, if (isMissed) "Dismiss" else "Hangup", hangupIntent)
             .apply {
                 if (isIncoming && !isMissed) addAction(android.R.drawable.ic_menu_call, "Answer", answerIntent)
-                if (!isSimulated && canUseFullScreenIntent()) {
+                if (!isSimulated && isIncoming && !isMissed && canUseFullScreenIntent()) {
                     setFullScreenIntent(pendingIntent, true)
                 }
             }
