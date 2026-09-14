@@ -31,10 +31,14 @@ import com.example.alibi.ui.theme.AlibiTheme
 import com.example.alibi.util.RoleHelper
 import android.Manifest
 import android.annotation.SuppressLint
+import android.app.KeyguardManager
 import android.app.role.RoleManager
 import android.content.pm.PackageManager
 import android.telecom.Call
+import android.view.KeyEvent
+import android.view.WindowManager
 import androidx.core.content.ContextCompat
+import com.example.alibi.telecom.SimulationPhase
 import kotlinx.coroutines.delay
 
 class MainActivity : ComponentActivity() {
@@ -44,6 +48,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        configureLockscreenFlags()
         
         // CRITICAL: Pre-register the simulation account before any call attempts.
         viewModel.onTelecomInitialization()
@@ -68,12 +73,47 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        configureLockscreenFlags()
         
         intent.data?.schemeSpecificPart?.takeIf {
             intent.action == Intent.ACTION_DIAL || intent.action == Intent.ACTION_VIEW
         }?.let { number ->
             viewModel.onDeeplinkReceived(number)
         }
+    }
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN ||
+            keyCode == KeyEvent.KEYCODE_VOLUME_UP ||
+            keyCode == KeyEvent.KEYCODE_POWER) {
+            val isRinging = CallStateManager.activeCalls.value.values.any {
+                it.state == Call.STATE_RINGING || it.phase == SimulationPhase.RINGING
+            }
+            if (isRinging) {
+                Log.d(TAG, "Volume/Power button pressed during incoming call. Silencing ringtone.")
+                CallStateManager.silenceRingtone()
+                return true
+            }
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
+    private fun configureLockscreenFlags() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(true)
+            setTurnScreenOn(true)
+            val keyguardManager = getSystemService(KEYGUARD_SERVICE) as? KeyguardManager
+            keyguardManager?.requestDismissKeyguard(this, null)
+        } else {
+            @Suppress("DEPRECATION")
+            window.addFlags(
+                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+                WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
+                WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD
+            )
+        }
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 
     /**
@@ -141,8 +181,9 @@ class MainActivity : ComponentActivity() {
                     ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_NUMBERS) != PackageManager.PERMISSION_GRANTED
             
             val needsDialerRole = !RoleHelper.isDialerRoleHeld(context)
+            val needsFullScreenIntent = !RoleHelper.canUseFullScreenIntent(context)
 
-            Log.d("Alibi_Onboarding", "Step Check - Notifications: $needsNotifications, CallLog: $needsCallLog, Contacts: $needsContacts, Phone: ${needsPhoneState || needsPhoneNumbers}, Role: $needsDialerRole")
+            Log.d("Alibi_Onboarding", "Step Check - Notifications: $needsNotifications, CallLog: $needsCallLog, Contacts: $needsContacts, Phone: ${needsPhoneState || needsPhoneNumbers}, Role: $needsDialerRole, FullScreenIntent: $needsFullScreenIntent")
 
             when {
                 needsNotifications -> {
@@ -168,6 +209,10 @@ class MainActivity : ComponentActivity() {
                 needsDialerRole -> {
                     Log.d("Alibi_Onboarding", "Requesting Dialer Role")
                     requestDialerRole(context, roleLauncher)
+                }
+                needsFullScreenIntent -> {
+                    Log.d("Alibi_Onboarding", "Requesting FullScreenIntent / Lockscreen permission")
+                    RoleHelper.openFullScreenIntentSettings(context)
                 }
                 else -> {
                     if (!status.isLegacyCleanedUp) {

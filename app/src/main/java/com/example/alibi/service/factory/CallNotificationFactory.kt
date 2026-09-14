@@ -1,8 +1,10 @@
 package com.example.alibi.service.factory
 
+import android.R
 import android.app.*
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.graphics.drawable.Icon as AndroidIcon
 import android.os.Build
 import androidx.core.app.NotificationCompat
@@ -58,9 +60,41 @@ class CallNotificationFactory(private val context: Context) {
             .build()
     }
 
+    fun createMissedCallNotification(phoneNumber: String, name: String, callId: String, channelId: String): Notification {
+        val dialIntent = Intent(Intent.ACTION_DIAL, Uri.fromParts("tel", phoneNumber, null)).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val callBackPendingIntent = PendingIntent.getActivity(
+            context,
+            callId.hashCode() + TelecomConstants.REQUEST_CODE_CONTENT,
+            dialIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val displayName = if (name.isNotBlank()) name else phoneNumber
+
+        return NotificationCompat.Builder(context, channelId)
+            .setSmallIcon(R.drawable.ic_menu_call)
+            .setContentTitle("Missed call")
+            .setContentText(displayName)
+            .setContentIntent(callBackPendingIntent)
+            .setAutoCancel(true)
+            .setOngoing(false)
+            .setCategory(NotificationCompat.CATEGORY_MISSED_CALL)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .addAction(
+                R.drawable.ic_menu_call,
+                "Call back",
+                callBackPendingIntent
+            )
+            .build()
+    }
+
     private fun createContentIntent(callId: String): PendingIntent {
         val intent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra(TelecomConstants.EXTRA_CALL_ID, callId)
+            putExtra(TelecomConstants.EXTRA_REAL_CALL, true)
         }
         val requestCode = callId.hashCode() + TelecomConstants.REQUEST_CODE_CONTENT
         return PendingIntent.getActivity(
