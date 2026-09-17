@@ -7,10 +7,12 @@ import android.content.Intent
 import android.net.Uri
 import android.graphics.drawable.Icon as AndroidIcon
 import android.os.Build
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.example.alibi.MainActivity
 import com.example.alibi.receiver.CallActionReceiver
 import com.example.alibi.telecom.TelecomConstants
+import com.example.alibi.ui.IncomingCallActivity
 
 class CallNotificationFactory(private val context: Context) {
 
@@ -91,17 +93,29 @@ class CallNotificationFactory(private val context: Context) {
     }
 
     private fun createContentIntent(callId: String): PendingIntent {
-        val intent = Intent(context, MainActivity::class.java).apply {
+        val intent = Intent(context, IncomingCallActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra(TelecomConstants.EXTRA_CALL_ID, callId)
             putExtra(TelecomConstants.EXTRA_REAL_CALL, true)
         }
         val requestCode = callId.hashCode() + TelecomConstants.REQUEST_CODE_CONTENT
+
+        val options = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            ActivityOptions.makeBasic().apply {
+                @Suppress("DEPRECATION")
+                setPendingIntentBackgroundActivityStartMode(ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED)
+                if (Build.VERSION.SDK_INT >= 35) {
+                    setPendingIntentCreatorBackgroundActivityStartMode(ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED)
+                }
+            }.toBundle()
+        } else null
+
         return PendingIntent.getActivity(
             context, 
             requestCode, 
             intent, 
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            options
         )
     }
 
@@ -142,6 +156,10 @@ class CallNotificationFactory(private val context: Context) {
         val hangupIntent = createActionIntent(TelecomConstants.ACTION_HANGUP, TelecomConstants.REQUEST_CODE_HANGUP, callId)
         val answerIntent = createActionIntent(TelecomConstants.ACTION_ANSWER, TelecomConstants.REQUEST_CODE_ANSWER, callId)
 
+        val isRinging = isIncoming && !isMissed && !isDialing
+        val isActive = !isIncoming && !isMissed && !isDialing
+        val isConnecting = isDialing && !isMissed
+
         val builder = Notification.Builder(context, channelId)
             .setSmallIcon(android.R.drawable.ic_menu_call)
             .setContentTitle(when {
@@ -154,13 +172,9 @@ class CallNotificationFactory(private val context: Context) {
             .setContentIntent(pendingIntent)
             .setOngoing(!isMissed)
             .setLocalOnly(true)
-            .setOnlyAlertOnce(true)
+            .setOnlyAlertOnce(!isRinging)
             .setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
             .setCategory(Notification.CATEGORY_CALL)
-
-        val isRinging = isIncoming && !isMissed && !isDialing
-        val isActive = !isIncoming && !isMissed && !isDialing
-        val isConnecting = isDialing && !isMissed
 
         // CallStyle is only allowed for the primary foreground notification on Android 14+.
         // For non-primary calls, we use a standard notification with action buttons.
@@ -265,7 +279,11 @@ class CallNotificationFactory(private val context: Context) {
     private fun canUseFullScreenIntent(): Boolean {
         return if (Build.VERSION.SDK_INT >= 34) {
             val manager = context.getSystemService(NotificationManager::class.java)
-            manager.canUseFullScreenIntent()
+            val allowed = manager.canUseFullScreenIntent()
+            if (!allowed) {
+                Log.w("CallNotificationFactory", "canUseFullScreenIntent() is FALSE on Android 14+! FullScreenIntent suppressed by OS.")
+            }
+            allowed
         } else {
             true
         }

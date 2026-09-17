@@ -73,11 +73,8 @@ class CallService : InCallService() {
         CallStateManager.onCallAdded(call, isSimulated, backgroundHandler)
         
         // Task 18: One-time notification start. 
+        // FullScreenIntent on notification delegates activity launch exclusively to SystemUI
         updateNotification(call, isSimulated)
-
-        if (!isSimulated) {
-            uiManager.showRealCallUi(id)
-        }
 
         CallStateManager.setAudioHandlers(
             mute = { audioRouteManager.setMuted(it) },

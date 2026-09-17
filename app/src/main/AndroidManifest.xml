@@ -69,6 +69,15 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".ui.IncomingCallActivity"
+            android:exported="false"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:excludeFromRecents="true"
+            android:launchMode="singleInstance"
+            android:theme="@style/Theme.Alibi" />
+
         <service
             android:name=".service.CallService"
             android:exported="true"

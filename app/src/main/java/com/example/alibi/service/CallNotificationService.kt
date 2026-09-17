@@ -12,6 +12,7 @@ import android.os.PowerManager
 import android.util.Log
 import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
+import android.media.AudioManager
 import android.media.Ringtone
 import android.media.RingtoneManager
 import android.provider.CallLog
@@ -62,20 +63,6 @@ class CallNotificationService : Service() {
         notificationFactory = CallNotificationFactory(this)
         
         createNotificationChannels()
-        
-        // Unified Primary Strategy: Start foreground immediately with the Primary ID (101).
-        // This ID will be updated with actual call data as soon as it's available.
-        val bootstrap = notificationFactory.createBootstrapNotification(CHANNEL_ID)
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                startForeground(NOTIFICATION_ID, bootstrap, ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL)
-            } else {
-                startForeground(NOTIFICATION_ID, bootstrap)
-            }
-            Log.d(TelecomConstants.NOTIFICATION_TAG, "Bootstrap foreground started with ID $NOTIFICATION_ID.")
-        } catch (e: Exception) {
-            Log.e(TelecomConstants.NOTIFICATION_TAG, "Failed to start bootstrap foreground service", e)
-        }
 
         val powerManager = getSystemService(POWER_SERVICE) as PowerManager
         wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, TelecomConstants.WAKE_LOCK_TAG).apply {
@@ -256,6 +243,9 @@ class CallNotificationService : Service() {
         }
         Log.d(TelecomConstants.NOTIFICATION_TAG, "showNotification: Processing update for $callId. Instant=$instant")
 
+        // Synchronously register state BEFORE dispatching to prevent duplicate queuing
+        lastNotificationStates[callId] = newState
+
         debounceJobs[callId]?.cancel()
         // Use Main thread immediately for responsive foreground updates
         serviceScope.launch(Dispatchers.Main) {
@@ -293,7 +283,8 @@ class CallNotificationService : Service() {
                 else -> false
             }
 
-            val channelId = if (isIncoming && !isMissed && !isDialing) CHANNEL_ID_INCOMING else CHANNEL_ID
+            val isIncomingRinging = isIncoming && !isMissed && !isDialing
+            val channelId = if (isIncomingRinging) CHANNEL_ID_INCOMING else CHANNEL_ID
             val notification = notificationFactory.createNotification(
                 phoneNumber = phoneNumber,
                 name = name,
@@ -306,9 +297,6 @@ class CallNotificationService : Service() {
                 callId = callId,
                 isPrimary = shouldBePrimary
             )
-
-            // Trigger Ringtone Audio & Screen Wake Lock for incoming ringing calls
-            handleRingtoneAndWakeLock(isIncoming && !isMissed && !isDialing)
 
             // Ensure call still exists in CallRepository or CallStateManager before posting
             val existsInRepo = CallRepository.sessions.value.containsKey(callId)
@@ -330,6 +318,9 @@ class CallNotificationService : Service() {
             } else {
                 notificationManager.notify(id, notification)
             }
+
+            // Trigger Ringtone Audio & Screen Wake Lock on Main Thread
+            handleRingtoneAndWakeLock(isIncomingRinging)
         }
     }
 
@@ -578,6 +569,8 @@ class CallNotificationService : Service() {
                 try {
                     val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
                     activeRingtone = RingtoneManager.getRingtone(applicationContext, uri)
+                    @Suppress("DEPRECATION")
+                    activeRingtone?.streamType = AudioManager.STREAM_RING
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                         activeRingtone?.isLooping = true
                     }
