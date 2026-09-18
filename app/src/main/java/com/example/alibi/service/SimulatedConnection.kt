@@ -5,6 +5,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
+import android.provider.CallLog
 import android.telecom.Call
 import android.telecom.Connection
 import android.telecom.DisconnectCause
@@ -15,6 +16,7 @@ import androidx.core.content.ContextCompat
 import com.example.alibi.telecom.CallLogSnapshot
 import com.example.alibi.telecom.CallStateManager
 import com.example.alibi.telecom.SimulatedCallRequest
+import com.example.alibi.telecom.SimulationPhase
 import com.example.alibi.telecom.TelecomConstants
 import kotlinx.coroutines.*
 import java.util.concurrent.atomic.AtomicBoolean
@@ -184,8 +186,13 @@ class SimulatedConnection(
         val calls = CallStateManager.activeCalls.value
         val metadata = calls[connectionId]
         val phase = metadata?.phase
-        val isDialingPhase = phase == com.example.alibi.telecom.SimulationPhase.DIALING || 
-                           phase == com.example.alibi.telecom.SimulationPhase.RINGING
+
+        val isOutgoing = request.direction == CallLog.Calls.OUTGOING_TYPE
+        val isIncoming = request.direction == CallLog.Calls.INCOMING_TYPE ||
+                         request.direction == CallLog.Calls.MISSED_TYPE
+
+        val isRinging = isIncoming && (state == STATE_RINGING || phase == SimulationPhase.RINGING)
+        val isDialing = isOutgoing && (state == STATE_DIALING || state == STATE_INITIALIZING || phase == SimulationPhase.DIALING)
 
         val managerAnswerTime = metadata?.answerTime ?: 0L
         val finalStartTime = if (managerAnswerTime > 0L) managerAnswerTime else if (localAnswerTime > 0L) localAnswerTime else 0L
@@ -193,8 +200,8 @@ class SimulatedConnection(
         val intent = Intent(context, CallNotificationService::class.java).apply {
             putExtra(TelecomConstants.EXTRA_CALL_ID, connectionId)
             putExtra(TelecomConstants.EXTRA_PHONE_NUMBER, request.phoneNumber)
-            putExtra(TelecomConstants.EXTRA_IS_INCOMING, state == STATE_RINGING || phase == com.example.alibi.telecom.SimulationPhase.RINGING)
-            putExtra(TelecomConstants.EXTRA_IS_DIALING, state == STATE_DIALING || state == STATE_INITIALIZING || isDialingPhase)
+            putExtra(TelecomConstants.EXTRA_IS_INCOMING, isRinging)
+            putExtra(TelecomConstants.EXTRA_IS_DIALING, isDialing)
             putExtra(TelecomConstants.EXTRA_IS_SIMULATED, true)
             if (finalStartTime > 0L) putExtra(TelecomConstants.EXTRA_START_TIME, finalStartTime)
         }

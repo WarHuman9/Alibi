@@ -164,8 +164,8 @@ class CallNotificationFactory(private val context: Context) {
             .setSmallIcon(android.R.drawable.ic_menu_call)
             .setContentTitle(when {
                 isMissed -> "Missed call"
-                isDialing -> "Calling..."
-                isIncoming -> "Incoming call..."
+                isRinging -> "Incoming call..."
+                isConnecting -> "Calling..."
                 else -> "Active call"
             })
             .setContentText(phoneNumber)

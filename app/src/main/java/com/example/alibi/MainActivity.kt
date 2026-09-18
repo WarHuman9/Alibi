@@ -84,13 +84,12 @@ class MainActivity : ComponentActivity() {
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN ||
-            keyCode == KeyEvent.KEYCODE_VOLUME_UP ||
-            keyCode == KeyEvent.KEYCODE_POWER) {
+            keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
             val isRinging = CallStateManager.activeCalls.value.values.any {
                 it.state == Call.STATE_RINGING || it.phase == SimulationPhase.RINGING
             }
             if (isRinging) {
-                Log.d(TAG, "Volume/Power button pressed during incoming call. Silencing ringtone.")
+                Log.d(TAG, "Volume button pressed during incoming call. Silencing ringtone.")
                 CallStateManager.silenceRingtone()
                 return true
             }
@@ -99,21 +98,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun configureLockscreenFlags() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-            setShowWhenLocked(true)
-            setTurnScreenOn(true)
-            val keyguardManager = getSystemService(KEYGUARD_SERVICE) as? KeyguardManager
-            keyguardManager?.requestDismissKeyguard(this, null)
-        } else {
-            @Suppress("DEPRECATION")
-            window.addFlags(
-                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
-                WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
-                WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
-                WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD
-            )
-        }
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        // MainActivity does not request lockscreen or keyguard bypass.
+        // Lockscreen display is handled exclusively by IncomingCallActivity.
     }
 
     /**

@@ -58,7 +58,7 @@ class IncomingCallActivity : ComponentActivity() {
                 }
 
                 // Grace period safety fallback: If initial ID was passed via Intent but session never appears in activeCalls within 1.5s
-                LaunchedEffect(currentCallIdState) {
+                LaunchedEffect(currentCallIdState, hasObservedCallSession) {
                     if (currentCallIdState != null && !hasObservedCallSession) {
                         delay(1500L)
                         if (!hasObservedCallSession) {

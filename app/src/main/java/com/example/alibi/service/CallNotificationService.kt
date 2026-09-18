@@ -194,7 +194,27 @@ class CallNotificationService : Service() {
                     return START_NOT_STICKY
                 }
 
-                // Force instant update in onStartCommand to clear bootstrap immediately
+                // Synchronous FGS Deadline Compliance:
+                // Instantly post high-importance notification to startForeground on line 1 of service execution.
+                if (foregroundCallId == null) {
+                    val isIncomingRinging = isIncoming && !isMissed && !isDialing
+                    val channelId = if (isIncomingRinging) CHANNEL_ID_INCOMING else CHANNEL_ID
+                    val initialNotification = notificationFactory.createNotification(
+                        phoneNumber = phoneNumber,
+                        name = name,
+                        isIncoming = isIncoming,
+                        isMissed = isMissed,
+                        isDialing = isDialing,
+                        isSimulated = isSimulated,
+                        startTime = startTime,
+                        channelId = channelId,
+                        callId = callId,
+                        isPrimary = true
+                    )
+                    updateForegroundInternal(callId, initialNotification)
+                }
+
+                // Force instant update in onStartCommand to synchronize notification state
                 showNotification(
                     phoneNumber = phoneNumber,
                     name = name,
@@ -242,9 +262,6 @@ class CallNotificationService : Service() {
             return
         }
         Log.d(TelecomConstants.NOTIFICATION_TAG, "showNotification: Processing update for $callId. Instant=$instant")
-
-        // Synchronously register state BEFORE dispatching to prevent duplicate queuing
-        lastNotificationStates[callId] = newState
 
         debounceJobs[callId]?.cancel()
         // Use Main thread immediately for responsive foreground updates
@@ -548,55 +565,8 @@ class CallNotificationService : Service() {
     private fun handleRingtoneAndWakeLock(isIncomingRinging: Boolean) {
         if (isIncomingRinging) {
             registerVolumeReceiver()
-
-            // Hardware Screen Wake Lock
-            if (screenWakeLock == null || screenWakeLock?.isHeld == false) {
-                try {
-                    val powerManager = getSystemService(POWER_SERVICE) as PowerManager
-                    @Suppress("DEPRECATION")
-                    screenWakeLock = powerManager.newWakeLock(
-                        PowerManager.FULL_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP or PowerManager.ON_AFTER_RELEASE,
-                        "Alibi:IncomingCallWake"
-                    )
-                    screenWakeLock?.acquire(30 * 1000L)
-                } catch (e: Exception) {
-                    Log.e(TelecomConstants.NOTIFICATION_TAG, "Failed to acquire screen wake lock", e)
-                }
-            }
-
-            // Ringtone Audio Playback
-            if (activeRingtone == null || activeRingtone?.isPlaying == false) {
-                try {
-                    val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
-                    activeRingtone = RingtoneManager.getRingtone(applicationContext, uri)
-                    @Suppress("DEPRECATION")
-                    activeRingtone?.streamType = AudioManager.STREAM_RING
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                        activeRingtone?.isLooping = true
-                    }
-                    activeRingtone?.play()
-                } catch (e: Exception) {
-                    Log.e(TelecomConstants.NOTIFICATION_TAG, "Failed to play incoming call ringtone", e)
-                }
-            }
         } else {
             unregisterVolumeReceiver()
-
-            // Stop Ringtone Audio
-            try {
-                if (activeRingtone?.isPlaying == true) {
-                    activeRingtone?.stop()
-                }
-            } catch (_: Exception) {}
-            activeRingtone = null
-
-            // Release Screen Wake Lock
-            try {
-                if (screenWakeLock?.isHeld == true) {
-                    screenWakeLock?.release()
-                }
-            } catch (_: Exception) {}
-            screenWakeLock = null
         }
     }
 
