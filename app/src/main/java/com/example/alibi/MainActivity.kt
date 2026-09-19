@@ -38,17 +38,27 @@ import android.telecom.Call
 import android.view.KeyEvent
 import android.view.WindowManager
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
 import com.example.alibi.telecom.SimulationPhase
+import com.example.alibi.util.ProximityController
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
     private val viewModel: MainViewModel by viewModels()
+    private val proximityController by lazy { ProximityController(this) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         configureLockscreenFlags()
+        
+        lifecycleScope.launch {
+            CallStateManager.isBusy.collect { isBusy ->
+                if (isBusy) proximityController.start() else proximityController.stop()
+            }
+        }
         
         // CRITICAL: Pre-register the simulation account before any call attempts.
         viewModel.onTelecomInitialization()
@@ -95,6 +105,11 @@ class MainActivity : ComponentActivity() {
             }
         }
         return super.onKeyDown(keyCode, event)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        proximityController.stop()
     }
 
     private fun configureLockscreenFlags() {

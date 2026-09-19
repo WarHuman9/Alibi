@@ -12,11 +12,15 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
 import com.example.alibi.telecom.CallStateManager
+import com.example.alibi.telecom.SimulationPhase
 import com.example.alibi.telecom.TelecomConstants
 import com.example.alibi.ui.screens.ActiveCallScreen
 import com.example.alibi.ui.theme.AlibiTheme
+import com.example.alibi.util.ProximityController
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * Dedicated lightweight Activity for lockscreen call display and FullScreenIntent launches.
@@ -25,11 +29,18 @@ import kotlinx.coroutines.delay
 class IncomingCallActivity : ComponentActivity() {
 
     private var currentCallIdState by mutableStateOf<String?>(null)
+    private val proximityController by lazy { ProximityController(this) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        configureLockscreenFlags()
+        updateLockscreenFlags(true)
+
+        lifecycleScope.launch {
+            CallStateManager.isBusy.collect { isBusy ->
+                if (isBusy) proximityController.start() else proximityController.stop()
+            }
+        }
 
         val initialId = intent?.getStringExtra(TelecomConstants.EXTRA_CALL_ID)
         currentCallIdState = initialId
@@ -43,6 +54,13 @@ class IncomingCallActivity : ComponentActivity() {
                 var hasObservedCallSession by remember(currentCallIdState) { mutableStateOf(false) }
 
                 val targetId = currentCallIdState ?: activeCalls.keys.firstOrNull()
+
+                val currentCallMeta = currentCallIdState?.let { activeCalls[it] }
+                val isRinging = currentCallMeta == null || currentCallMeta.state == Call.STATE_RINGING || (currentCallMeta.isSimulated && currentCallMeta.phase == SimulationPhase.RINGING)
+
+                LaunchedEffect(isRinging) {
+                    updateLockscreenFlags(isRinging)
+                }
 
                 LaunchedEffect(currentCallIdState, activeCalls) {
                     val currentId = currentCallIdState
@@ -79,13 +97,12 @@ class IncomingCallActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
-        configureLockscreenFlags()
+        updateLockscreenFlags(true)
         Log.d("[Alibi_FSI]", "IncomingCallActivity.onStart: callId=$currentCallIdState")
     }
 
     override fun onResume() {
         super.onResume()
-        configureLockscreenFlags()
         requestKeyguardDismissalWithCallback()
         Log.d("[Alibi_FSI]", "IncomingCallActivity.onResume: callId=$currentCallIdState")
     }
@@ -108,7 +125,6 @@ class IncomingCallActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        configureLockscreenFlags()
         val newCallId = intent.getStringExtra(TelecomConstants.EXTRA_CALL_ID)
         Log.d("[Alibi_FSI]", "IncomingCallActivity.onNewIntent: newCallId=$newCallId")
         if (!newCallId.isNullOrBlank()) {
@@ -116,23 +132,31 @@ class IncomingCallActivity : ComponentActivity() {
         }
     }
 
-    private fun configureLockscreenFlags() {
+    private fun updateLockscreenFlags(isRinging: Boolean) {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
                 setShowWhenLocked(true)
-                setTurnScreenOn(true)
+                setTurnScreenOn(isRinging)
             } else {
                 @Suppress("DEPRECATION")
-                window.addFlags(
-                    WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
-                    WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
-                    WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
-                    WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD
-                )
+                if (isRinging) {
+                    window.addFlags(
+                        WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                        WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+                        WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD
+                    )
+                } else {
+                    window.clearFlags(WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON)
+                }
             }
-            Log.d("[Alibi_FSI]", "configureLockscreenFlags: Successfully set lockscreen & keyguard flags")
+            if (isRinging) {
+                window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            } else {
+                window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            }
+            Log.d("[Alibi_FSI]", "updateLockscreenFlags: isRinging=$isRinging")
         } catch (e: Exception) {
-            Log.e("[Alibi_FSI]", "configureLockscreenFlags: Error setting lockscreen flags", e)
+            Log.e("[Alibi_FSI]", "updateLockscreenFlags: Error updating lockscreen flags", e)
         }
     }
 
@@ -161,6 +185,7 @@ class IncomingCallActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        proximityController.stop()
         Log.d("[Alibi_FSI]", "IncomingCallActivity.onDestroy: callId=$currentCallIdState")
     }
 

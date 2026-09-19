@@ -23,6 +23,7 @@ import com.example.alibi.telecom.CallRepository
 import com.example.alibi.telecom.CallStateManager
 import com.example.alibi.telecom.SimulationPhase
 import com.example.alibi.telecom.TelecomConstants
+import com.example.alibi.util.ProximityController
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.sync.Mutex
