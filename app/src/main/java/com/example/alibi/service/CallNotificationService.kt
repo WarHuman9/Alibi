@@ -2,12 +2,19 @@ package com.example.alibi.service
 
 import android.app.*
 import android.annotation.SuppressLint
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import android.util.Log
 import android.content.pm.ServiceInfo
+import android.media.AudioAttributes
+import android.media.AudioManager
+import android.media.Ringtone
+import android.media.RingtoneManager
 import android.provider.CallLog
 import android.telecom.Call
 import com.example.alibi.receiver.CallActionReceiver
@@ -16,6 +23,7 @@ import com.example.alibi.telecom.CallRepository
 import com.example.alibi.telecom.CallStateManager
 import com.example.alibi.telecom.SimulationPhase
 import com.example.alibi.telecom.TelecomConstants
+import com.example.alibi.util.ProximityController
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.sync.Mutex
@@ -56,21 +64,16 @@ class CallNotificationService : Service() {
         notificationFactory = CallNotificationFactory(this)
         
         createNotificationChannels()
-        
-        // Unified Primary Strategy: Start foreground immediately with the Primary ID (101).
-        // This ID will be updated with actual call data as soon as it's available.
-        val bootstrap = notificationFactory.createBootstrapNotification(CHANNEL_ID)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIFICATION_ID, bootstrap, ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL)
-        } else {
-            startForeground(NOTIFICATION_ID, bootstrap)
-        }
-        Log.d(TelecomConstants.NOTIFICATION_TAG, "Bootstrap foreground started with ID $NOTIFICATION_ID.")
 
         val powerManager = getSystemService(POWER_SERVICE) as PowerManager
         wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, TelecomConstants.WAKE_LOCK_TAG).apply {
             acquire(10 * 60 * 1000L) // 10 minutes max safety
         }
+
+        CallStateManager.onSilenceRingtoneRequested = {
+            handleRingtoneAndWakeLock(isIncomingRinging = false)
+        }
+
         observeCallState()
     }
 
@@ -180,6 +183,10 @@ class CallNotificationService : Service() {
             val isSimulated = it.getBooleanExtra(TelecomConstants.EXTRA_IS_SIMULATED, false)
             val startTime = it.getLongExtra(TelecomConstants.EXTRA_START_TIME, 0L)
             
+            val powerManager = getSystemService(POWER_SERVICE) as? PowerManager
+            val keyguardManager = getSystemService(KEYGUARD_SERVICE) as? KeyguardManager
+            Log.d("[Alibi_FSI]", "CallNotificationService.onStartCommand: callId=$callId, isIncoming=$isIncoming, screenInteractive=${powerManager?.isInteractive}, keyguardLocked=${keyguardManager?.isKeyguardLocked}")
+
             if (callId != null) {
                 val info = CallStateManager.activeCalls.value[callId]
                 val isExplicitlyDisconnected = info != null && (
@@ -192,7 +199,28 @@ class CallNotificationService : Service() {
                     return START_NOT_STICKY
                 }
 
-                // Force instant update in onStartCommand to clear bootstrap immediately
+                // Synchronous FGS Deadline Compliance:
+                // Instantly post high-importance notification to startForeground on line 1 of service execution.
+                if (foregroundCallId == null) {
+                    val isIncomingRinging = isIncoming && !isMissed && !isDialing
+                    val channelId = if (isIncomingRinging) CHANNEL_ID_INCOMING else CHANNEL_ID
+                    val initialNotification = notificationFactory.createNotification(
+                        phoneNumber = phoneNumber,
+                        name = name,
+                        isIncoming = isIncoming,
+                        isMissed = isMissed,
+                        isDialing = isDialing,
+                        isSimulated = isSimulated,
+                        startTime = startTime,
+                        channelId = channelId,
+                        callId = callId,
+                        isPrimary = true
+                    )
+                    Log.d("[Alibi_FSI]", "onStartCommand: Executing synchronous startForeground for $callId on channel $channelId")
+                    updateForegroundInternal(callId, initialNotification)
+                }
+
+                // Force instant update in onStartCommand to synchronize notification state
                 showNotification(
                     phoneNumber = phoneNumber,
                     name = name,
@@ -278,7 +306,8 @@ class CallNotificationService : Service() {
                 else -> false
             }
 
-            val channelId = if (isSimulated) CHANNEL_ID_SILENT else CHANNEL_ID
+            val isIncomingRinging = isIncoming && !isMissed && !isDialing
+            val channelId = if (isIncomingRinging) CHANNEL_ID_INCOMING else CHANNEL_ID
             val notification = notificationFactory.createNotification(
                 phoneNumber = phoneNumber,
                 name = name,
@@ -305,13 +334,16 @@ class CallNotificationService : Service() {
             activeNotifications[callId] = notification
             lastNotificationStates[callId] = newState
             
-            Log.d(TelecomConstants.NOTIFICATION_TAG, "Posting notification for $callId (id=$id). isPrimary=$shouldBePrimary")
+            Log.d("[Alibi_FSI]", "CallNotificationService: performShowNotification posting notification for $callId (id=$id, isPrimary=$shouldBePrimary, channel=$channelId)")
             
             if (shouldBePrimary) {
                 updateForegroundInternal(callId, notification)
             } else {
                 notificationManager.notify(id, notification)
             }
+
+            // Trigger Ringtone Audio & Screen Wake Lock on Main Thread
+            handleRingtoneAndWakeLock(isIncomingRinging)
         }
     }
 
@@ -388,7 +420,25 @@ class CallNotificationService : Service() {
             debounceJobs.remove(callId)?.cancel()
             val id = activeNotificationIds.remove(callId)
             activeNotifications.remove(callId)
-            lastNotificationStates.remove(callId)
+            val lastState = lastNotificationStates.remove(callId)
+
+            // Stop ringtone audio and screen wake lock if this was the incoming call
+            if (lastState != null && lastState.isIncoming) {
+                handleRingtoneAndWakeLock(false)
+            }
+
+            // Post Missed Call Notification for unanswered incoming calls
+            if (lastState != null && lastState.isIncoming && !lastState.isMissed && lastState.startTime == 0L) {
+                val missedNotification = notificationFactory.createMissedCallNotification(
+                    phoneNumber = lastState.phoneNumber,
+                    name = lastState.name,
+                    callId = callId,
+                    channelId = CHANNEL_ID_MISSED
+                )
+                val missedId = getNotificationId("MISSED_$callId")
+                notificationManager.notify(missedId, missedNotification)
+                Log.d(TelecomConstants.NOTIFICATION_TAG, "[$now] performCancelNotification: Posted missed call notification for $callId (id=$missedId)")
+            }
             
             // If it was a secondary notification, cancel its specific ID
             if (id != null && id != NOTIFICATION_ID) {
@@ -464,10 +514,65 @@ class CallNotificationService : Service() {
         foregroundCallId = callId
         Log.d(TelecomConstants.NOTIFICATION_TAG, "Updating Primary Foreground (ID $NOTIFICATION_ID) for call $callId")
         
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL)
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+        } catch (e: Exception) {
+            Log.e(TelecomConstants.NOTIFICATION_TAG, "Failed to update foreground service, falling back to NotificationManager.notify", e)
+            notificationManager.notify(NOTIFICATION_ID, notification)
+        }
+    }
+
+    private var activeRingtone: Ringtone? = null
+    private var screenWakeLock: PowerManager.WakeLock? = null
+    private var isVolumeReceiverRegistered = false
+
+    private val volumeKeyReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            val action = intent.action
+            if (action == "android.media.VOLUME_CHANGED_ACTION" || action == Intent.ACTION_SCREEN_OFF) {
+                Log.d(TelecomConstants.NOTIFICATION_TAG, "System volume/power key press detected. Silencing ringtone.")
+                handleRingtoneAndWakeLock(isIncomingRinging = false)
+            }
+        }
+    }
+
+    private fun registerVolumeReceiver() {
+        if (!isVolumeReceiverRegistered) {
+            try {
+                val filter = IntentFilter().apply {
+                    addAction("android.media.VOLUME_CHANGED_ACTION")
+                    addAction(Intent.ACTION_SCREEN_OFF)
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    registerReceiver(volumeKeyReceiver, filter, RECEIVER_EXPORTED)
+                } else {
+                    registerReceiver(volumeKeyReceiver, filter)
+                }
+                isVolumeReceiverRegistered = true
+            } catch (e: Exception) {
+                Log.e(TelecomConstants.NOTIFICATION_TAG, "Failed to register volume key receiver", e)
+            }
+        }
+    }
+
+    private fun unregisterVolumeReceiver() {
+        if (isVolumeReceiverRegistered) {
+            try {
+                unregisterReceiver(volumeKeyReceiver)
+            } catch (_: Exception) {}
+            isVolumeReceiverRegistered = false
+        }
+    }
+
+    private fun handleRingtoneAndWakeLock(isIncomingRinging: Boolean) {
+        if (isIncomingRinging) {
+            registerVolumeReceiver()
         } else {
-            startForeground(NOTIFICATION_ID, notification)
+            unregisterVolumeReceiver()
         }
     }
 
@@ -481,21 +586,50 @@ class CallNotificationService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val manager = getSystemService(NotificationManager::class.java)
             
-            val activeChannel = NotificationChannel(CHANNEL_ID, "Active Calls", NotificationManager.IMPORTANCE_HIGH).apply {
-                description = "Notifications for active calls"
+            // Clean up legacy channels so Android system settings adopt the new channel rules
+            try {
+                manager.deleteNotificationChannel("call_channel")
+                manager.deleteNotificationChannel("call_channel_silent")
+                manager.deleteNotificationChannel("call_channel_incoming_v2")
+            } catch (_: Exception) {}
+
+            // Ongoing & Outgoing Calls Channel (IMPORTANCE_LOW -> Shade only, NO heads-up banner)
+            val ongoingChannel = NotificationChannel(CHANNEL_ID, "Ongoing & Outgoing Calls", NotificationManager.IMPORTANCE_LOW).apply {
+                description = "Notifications for ongoing and outgoing calls"
                 setSound(null, null)
                 enableLights(false)
                 enableVibration(false)
+                setShowBadge(false)
                 lockscreenVisibility = Notification.VISIBILITY_PUBLIC
             }
-            manager.createNotificationChannel(activeChannel)
+            manager.createNotificationChannel(ongoingChannel)
 
-            val silentChannel = NotificationChannel(CHANNEL_ID_SILENT, "Simulated Calls (Standard)", NotificationManager.IMPORTANCE_HIGH).apply {
-                description = "Standard notifications for simulated calls"
-                setSound(null, null)
-                setShowBadge(false)
+            // Incoming Calls Channel (IMPORTANCE_HIGH -> Heads-up alert banner + Ringtone Sound & Vibration)
+            val ringtoneUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+            val audioAttributes = AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build()
+
+            val incomingChannel = NotificationChannel(CHANNEL_ID_INCOMING, "Incoming Calls", NotificationManager.IMPORTANCE_HIGH).apply {
+                description = "Notifications for incoming calls"
+                setSound(ringtoneUri, audioAttributes)
+                enableLights(true)
+                enableVibration(true)
+                vibrationPattern = longArrayOf(0, 1000, 500, 1000)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
             }
-            manager.createNotificationChannel(silentChannel)
+            manager.createNotificationChannel(incomingChannel)
+
+            // Missed Calls Channel (IMPORTANCE_DEFAULT -> Notification Shade)
+            val missedChannel = NotificationChannel(CHANNEL_ID_MISSED, "Missed Calls", NotificationManager.IMPORTANCE_DEFAULT).apply {
+                description = "Notifications for missed calls"
+                enableLights(true)
+                enableVibration(true)
+                setShowBadge(true)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+            }
+            manager.createNotificationChannel(missedChannel)
         }
     }
 
@@ -523,12 +657,18 @@ class CallNotificationService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         audioHeartbeatManager.stop()
+        unregisterVolumeReceiver()
+        handleRingtoneAndWakeLock(false)
         if (wakeLock?.isHeld == true) {
             wakeLock?.release()
         }
         
-        // Synchronous cleanup for maximum reliability on exit
-        notificationManager.cancelAll()
+        // Synchronous cleanup for active ongoing call notifications on exit
+        activeNotificationIds.values.forEach { id ->
+            try { notificationManager.cancel(id) } catch (_: Exception) {}
+        }
+        try { notificationManager.cancel(NOTIFICATION_ID) } catch (_: Exception) {}
+
         activeNotificationIds.clear()
         activeNotifications.clear()
         lastNotificationStates.clear()
@@ -539,8 +679,10 @@ class CallNotificationService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     companion object {
-        private const val CHANNEL_ID = "call_channel"
-        private const val CHANNEL_ID_SILENT = "call_channel_silent"
+        private const val CHANNEL_ID = "call_channel_ongoing_v2"
+        private const val CHANNEL_ID_INCOMING = "call_channel_incoming_v3"
+        private const val CHANNEL_ID_MISSED = "call_channel_missed_v1"
+        private const val CHANNEL_ID_SILENT = "call_channel_ongoing_v2"
         private const val NOTIFICATION_ID = 101
     }
 }

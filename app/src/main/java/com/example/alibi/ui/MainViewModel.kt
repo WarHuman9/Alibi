@@ -43,8 +43,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val deeplinkNumber = _deeplinkNumber.asStateFlow()
 
     init {
-        // Initial registration attempt
-        viewModelScope.launch {
+        // Initial registration attempt on background thread to keep Main thread frame budget clean
+        viewModelScope.launch(Dispatchers.IO) {
             telecomHelper.registerPhoneAccount()
         }
     }

@@ -43,6 +43,13 @@ import com.example.alibi.telecom.CallMetadata
 import com.example.alibi.telecom.CallStateManager
 import com.example.alibi.telecom.TelecomHelper
 import com.example.alibi.util.CallLogHelper
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -71,12 +78,13 @@ fun DialerScreen(
 
     var selectedTab by rememberSaveable { mutableStateOf(PhoneSubTab.RECENTS) }
     var searchQuery by rememberSaveable { mutableStateOf("") }
-    var phoneNumber by rememberSaveable { mutableStateOf("") }
+    var textFieldValue by remember { mutableStateOf(TextFieldValue(text = "")) }
+    val phoneNumber = textFieldValue.text
 
     // Sync phoneNumber with deep-links
     LaunchedEffect(deeplinkNumber) {
         deeplinkNumber?.let {
-            phoneNumber = it
+            textFieldValue = TextFieldValue(text = it, selection = TextRange(it.length))
             mainViewModel.consumeDeeplink()
             selectedTab = PhoneSubTab.RECENTS
         }
@@ -173,7 +181,7 @@ fun DialerScreen(
                                 calls = filteredCalls,
                                 sims = simAccounts,
                                 onCallClick = { 
-                                    phoneNumber = it
+                                    textFieldValue = TextFieldValue(text = it, selection = TextRange(it.length))
                                     dialPadVisible = true
                                 }
                             )
@@ -182,7 +190,7 @@ fun DialerScreen(
                             ContactsScreen(
                                 searchQuery = searchQuery,
                                 onContactClick = { 
-                                    phoneNumber = it
+                                    textFieldValue = TextFieldValue(text = it, selection = TextRange(it.length))
                                     selectedTab = PhoneSubTab.RECENTS
                                     dialPadVisible = true
                                 }
@@ -207,14 +215,45 @@ fun DialerScreen(
             enter = expandVertically() + fadeIn(),
             exit = shrinkVertically() + fadeOut()
         ) {
-            val isCallEnabled = phoneNumber.filter { it.isDigit() }.length == 10
+            val isCallEnabled = phoneNumber.filter { it.isDigit() || it == '+' }.length >= 10
             DialPad(
-                phoneNumber = phoneNumber,
+                textFieldValue = textFieldValue,
+                onValueChange = { textFieldValue = it },
                 selectedSim = selectedSim,
                 availableSims = simAccounts,
                 isCallEnabled = isCallEnabled,
-                onDigitClick = { phoneNumber += it },
-                onBackspace = { if (phoneNumber.isNotEmpty()) phoneNumber = phoneNumber.dropLast(1) },
+                onDigitClick = { digit ->
+                    val text = textFieldValue.text
+                    val selection = textFieldValue.selection
+                    val start = selection.min.coerceIn(0, text.length)
+                    val end = selection.max.coerceIn(0, text.length)
+                    val newText = text.replaceRange(start, end, digit)
+                    val newCursor = start + digit.length
+                    textFieldValue = TextFieldValue(
+                        text = newText,
+                        selection = TextRange(newCursor)
+                    )
+                },
+                onBackspace = {
+                    val text = textFieldValue.text
+                    val selection = textFieldValue.selection
+                    if (selection.length > 0) {
+                        val start = selection.min.coerceIn(0, text.length)
+                        val end = selection.max.coerceIn(0, text.length)
+                        val newText = text.removeRange(start, end)
+                        textFieldValue = TextFieldValue(
+                            text = newText,
+                            selection = TextRange(start)
+                        )
+                    } else if (selection.start > 0) {
+                        val start = selection.start - 1
+                        val newText = text.removeRange(start, selection.start)
+                        textFieldValue = TextFieldValue(
+                            text = newText,
+                            selection = TextRange(start)
+                        )
+                    }
+                },
                 onSimSelected = { 
                     selectedSim = it
                     telecomHelper.setPreferredSimId(it.handle.id)
@@ -399,7 +438,17 @@ private fun formatDuration(seconds: Long): String {
 }
 
 @Composable
-fun DialPad(phoneNumber: String, selectedSim: TelecomHelper.SimAccount?, availableSims: List<TelecomHelper.SimAccount>, isCallEnabled: Boolean, onDigitClick: (String) -> Unit, onBackspace: () -> Unit, onSimSelected: (TelecomHelper.SimAccount) -> Unit, onCallClick: () -> Unit) {
+fun DialPad(
+    textFieldValue: TextFieldValue,
+    onValueChange: (TextFieldValue) -> Unit,
+    selectedSim: TelecomHelper.SimAccount?,
+    availableSims: List<TelecomHelper.SimAccount>,
+    isCallEnabled: Boolean,
+    onDigitClick: (String) -> Unit,
+    onBackspace: () -> Unit,
+    onSimSelected: (TelecomHelper.SimAccount) -> Unit,
+    onCallClick: () -> Unit
+) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp),
@@ -407,7 +456,11 @@ fun DialPad(phoneNumber: String, selectedSim: TelecomHelper.SimAccount?, availab
         tonalElevation = 8.dp
     ) {
         Column(modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            NumberDisplay(phoneNumber = phoneNumber, onBackspace = onBackspace)
+            NumberDisplay(
+                textFieldValue = textFieldValue,
+                onValueChange = onValueChange,
+                onBackspace = onBackspace
+            )
 
             val keys = listOf(listOf("1", "2", "3"), listOf("4", "5", "6"), listOf("7", "8", "9"), listOf("*", "0", "#"))
             keys.forEach { row ->
@@ -429,10 +482,34 @@ fun DialPad(phoneNumber: String, selectedSim: TelecomHelper.SimAccount?, availab
 }
 
 @Composable
-private fun NumberDisplay(phoneNumber: String, onBackspace: () -> Unit) {
+private fun NumberDisplay(
+    textFieldValue: TextFieldValue,
+    onValueChange: (TextFieldValue) -> Unit,
+    onBackspace: () -> Unit
+) {
+    val keyboardController = LocalSoftwareKeyboardController.current
+
     Box(modifier = Modifier.fillMaxWidth().height(52.dp), contentAlignment = Alignment.Center) {
-        Text(text = phoneNumber, style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onSurface, maxLines = 1)
-        if (phoneNumber.isNotEmpty()) {
+        BasicTextField(
+            value = textFieldValue,
+            onValueChange = {
+                onValueChange(it)
+                keyboardController?.hide()
+            },
+            readOnly = false,
+            textStyle = MaterialTheme.typography.headlineSmall.copy(
+                color = MaterialTheme.colorScheme.onSurface,
+                textAlign = TextAlign.Center
+            ),
+            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 48.dp)
+                .onFocusChanged { if (it.isFocused) keyboardController?.hide() },
+            singleLine = true
+        )
+        if (textFieldValue.text.isNotEmpty()) {
             IconButton(onClick = onBackspace, modifier = Modifier.align(Alignment.CenterEnd)) {
                 Icon(Icons.AutoMirrored.Rounded.Backspace, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }

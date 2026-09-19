@@ -69,12 +69,21 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".ui.IncomingCallActivity"
+            android:exported="false"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:excludeFromRecents="true"
+            android:launchMode="singleInstance"
+            android:theme="@style/Theme.Alibi" />
+
         <service
             android:name=".service.CallService"
             android:exported="true"
             android:permission="android.permission.BIND_INCALL_SERVICE">
             <meta-data android:name="android.telecom.IN_CALL_SERVICE_UI" android:value="true" />
-            <meta-data android:name="android.telecom.IN_CALL_SERVICE_RINGING" android:value="true" />
+            <meta-data android:name="android.telecom.IN_CALL_SERVICE_RINGING" android:value="false" />
             <intent-filter>
                 <action android:name="android.telecom.InCallService" />
             </intent-filter>

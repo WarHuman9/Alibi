@@ -125,6 +125,11 @@ object CallStateManager {
     @Volatile var onCallStateChangedHook: ((Call, Int) -> Unit)? = null
     @Volatile var onMuteRequested: ((Boolean) -> Unit)? = null
     @Volatile var onSpeakerRequested: ((Boolean) -> Unit)? = null
+    @Volatile var onSilenceRingtoneRequested: (() -> Unit)? = null
+
+    fun silenceRingtone() {
+        onSilenceRingtoneRequested?.invoke()
+    }
 
     @Volatile private var isAudioHandlerPriority = false
 
