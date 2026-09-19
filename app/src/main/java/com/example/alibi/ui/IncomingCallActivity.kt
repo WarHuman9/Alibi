@@ -51,11 +51,11 @@ class IncomingCallActivity : ComponentActivity() {
                         val meta = activeCalls[currentId]
                         if (meta != null && (meta.state == Call.STATE_DISCONNECTED || meta.state == Call.STATE_DISCONNECTING)) {
                             Log.d("[Alibi_FSI]", "Call $currentId observed as disconnected. Finishing IncomingCallActivity.")
-                            finish()
+                            finishAndRemoveTask()
                         }
                     } else if (hasObservedCallSession) {
                         Log.d("[Alibi_FSI]", "Call $currentId removed after observation. Finishing IncomingCallActivity.")
-                        finish()
+                        finishAndRemoveTask()
                     }
                 }
 
@@ -65,7 +65,7 @@ class IncomingCallActivity : ComponentActivity() {
                         delay(1500L)
                         if (!hasObservedCallSession) {
                             Log.w("[Alibi_FSI]", "Grace period expired without observing session for $currentCallIdState. Stale launch -> Finishing.")
-                            finish()
+                            finishAndRemoveTask()
                         }
                     }
                 }
@@ -130,7 +130,6 @@ class IncomingCallActivity : ComponentActivity() {
                     WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD
                 )
             }
-            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             Log.d("[Alibi_FSI]", "configureLockscreenFlags: Successfully set lockscreen & keyguard flags")
         } catch (e: Exception) {
             Log.e("[Alibi_FSI]", "configureLockscreenFlags: Error setting lockscreen flags", e)

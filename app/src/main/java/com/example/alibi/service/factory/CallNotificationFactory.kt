@@ -9,7 +9,7 @@ import android.graphics.drawable.Icon as AndroidIcon
 import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationCompat
-import com.example.alibi.MainActivity
+
 import com.example.alibi.receiver.CallActionReceiver
 import com.example.alibi.telecom.TelecomConstants
 import com.example.alibi.ui.IncomingCallActivity
@@ -41,26 +41,7 @@ class CallNotificationFactory(private val context: Context) {
         }
     }
 
-    fun createBootstrapNotification(channelId: String): Notification {
-        val intent = Intent(context, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-        }
-        val pendingIntent = PendingIntent.getActivity(
-            context, 0, intent, PendingIntent.FLAG_IMMUTABLE
-        )
 
-        return NotificationCompat.Builder(context, channelId)
-            .setSmallIcon(android.R.drawable.ic_menu_call)
-            .setContentTitle("Call Service")
-            .setContentText("Initializing...")
-            .setContentIntent(pendingIntent)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .setCategory(Notification.CATEGORY_SERVICE)
-            .setOngoing(true)
-            .setOnlyAlertOnce(true)
-            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
-            .build()
-    }
 
     fun createMissedCallNotification(phoneNumber: String, name: String, callId: String, channelId: String): Notification {
         val dialIntent = Intent(Intent.ACTION_DIAL, Uri.fromParts("tel", phoneNumber, null)).apply {
@@ -94,7 +75,7 @@ class CallNotificationFactory(private val context: Context) {
 
     private fun createContentIntent(callId: String): PendingIntent {
         val intent = Intent(context, IncomingCallActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_USER_ACTION
             putExtra(TelecomConstants.EXTRA_CALL_ID, callId)
             putExtra(TelecomConstants.EXTRA_REAL_CALL, true)
         }
@@ -175,20 +156,24 @@ class CallNotificationFactory(private val context: Context) {
             .setOnlyAlertOnce(!isRinging)
             .setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
             .setCategory(Notification.CATEGORY_CALL)
+            .setVisibility(Notification.VISIBILITY_PUBLIC)
+
+        @Suppress("DEPRECATION")
+        builder.setPriority(Notification.PRIORITY_MAX)
 
         // CallStyle is only allowed for the primary foreground notification on Android 14+.
         // For non-primary calls, we use a standard notification with action buttons.
         val useCallStyle = isPrimary && (isRinging || isActive)
 
         val canFsi = canUseFullScreenIntent()
-        Log.d("[Alibi_FSI]", "CallNotificationFactory: isPrimary=$isPrimary, isRinging=$isRinging, canUseFullScreenIntent=$canFsi, channel=$channelId")
+        Log.d("[Alibi_FSI]", "CallNotificationFactory: isRinging=$isRinging, canUseFullScreenIntent=$canFsi, channel=$channelId")
 
-        // Only push FullScreenIntent / Heads-up alert for Incoming Ringing Calls
-        if (isPrimary && isRinging && canFsi) {
+        // Unconditional FullScreenIntent for Incoming Ringing Calls (no isPrimary or simulation restriction)
+        if (isRinging && canFsi) {
             builder.setFullScreenIntent(pendingIntent, true)
-            Log.d("[Alibi_FSI]", "CallNotificationFactory: setFullScreenIntent attached successfully for $callId")
+            Log.d("[Alibi_FSI]", "CallNotificationFactory: setFullScreenIntent attached unconditionally for $callId")
         } else if (isRinging) {
-            Log.w("[Alibi_FSI]", "CallNotificationFactory: FullScreenIntent SUPPRESSED for $callId. isPrimary=$isPrimary, isRinging=$isRinging, canUseFullScreenIntent=$canFsi")
+            Log.w("[Alibi_FSI]", "CallNotificationFactory: FullScreenIntent SUPPRESSED for $callId. canUseFullScreenIntent=$canFsi")
         }
 
         when {
@@ -269,13 +254,14 @@ class CallNotificationFactory(private val context: Context) {
             .setWhen(if (startTime > 0L) startTime else System.currentTimeMillis())
             .setUsesChronometer(!isMissed && !isDialing)
             .setShowWhen(!isMissed && !isDialing)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setCategory(Notification.CATEGORY_CALL)
             .setOngoing(!isMissed)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, if (isMissed) "Dismiss" else "Hangup", hangupIntent)
             .apply {
                 if (isIncoming && !isMissed) addAction(android.R.drawable.ic_menu_call, "Answer", answerIntent)
-                if (!isSimulated && isIncoming && !isMissed && canUseFullScreenIntent()) {
+                if (isIncoming && !isMissed && canUseFullScreenIntent()) {
                     setFullScreenIntent(pendingIntent, true)
                 }
             }

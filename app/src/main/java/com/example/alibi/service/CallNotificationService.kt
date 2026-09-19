@@ -333,7 +333,7 @@ class CallNotificationService : Service() {
             activeNotifications[callId] = notification
             lastNotificationStates[callId] = newState
             
-            Log.d(TelecomConstants.NOTIFICATION_TAG, "Posting notification for $callId (id=$id). isPrimary=$shouldBePrimary")
+            Log.d("[Alibi_FSI]", "CallNotificationService: performShowNotification posting notification for $callId (id=$id, isPrimary=$shouldBePrimary, channel=$channelId)")
             
             if (shouldBePrimary) {
                 updateForegroundInternal(callId, notification)
