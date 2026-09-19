@@ -182,6 +182,10 @@ class CallNotificationService : Service() {
             val isSimulated = it.getBooleanExtra(TelecomConstants.EXTRA_IS_SIMULATED, false)
             val startTime = it.getLongExtra(TelecomConstants.EXTRA_START_TIME, 0L)
             
+            val powerManager = getSystemService(POWER_SERVICE) as? PowerManager
+            val keyguardManager = getSystemService(KEYGUARD_SERVICE) as? KeyguardManager
+            Log.d("[Alibi_FSI]", "CallNotificationService.onStartCommand: callId=$callId, isIncoming=$isIncoming, screenInteractive=${powerManager?.isInteractive}, keyguardLocked=${keyguardManager?.isKeyguardLocked}")
+
             if (callId != null) {
                 val info = CallStateManager.activeCalls.value[callId]
                 val isExplicitlyDisconnected = info != null && (
@@ -211,6 +215,7 @@ class CallNotificationService : Service() {
                         callId = callId,
                         isPrimary = true
                     )
+                    Log.d("[Alibi_FSI]", "onStartCommand: Executing synchronous startForeground for $callId on channel $channelId")
                     updateForegroundInternal(callId, initialNotification)
                 }
 

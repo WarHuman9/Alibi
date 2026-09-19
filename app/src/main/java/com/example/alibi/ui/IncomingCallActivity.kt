@@ -33,7 +33,9 @@ class IncomingCallActivity : ComponentActivity() {
 
         val initialId = intent?.getStringExtra(TelecomConstants.EXTRA_CALL_ID)
         currentCallIdState = initialId
-        Log.d(TAG, "onCreate: callId=$initialId")
+        
+        val keyguardManager = getSystemService(KEYGUARD_SERVICE) as? KeyguardManager
+        Log.d("[Alibi_FSI]", "IncomingCallActivity.onCreate: callId=$initialId, action=${intent?.action}, flags=${intent?.flags}, isKeyguardLocked=${keyguardManager?.isKeyguardLocked}, isKeyguardSecure=${keyguardManager?.isKeyguardSecure}")
 
         setContent {
             AlibiTheme {
@@ -48,11 +50,11 @@ class IncomingCallActivity : ComponentActivity() {
                         hasObservedCallSession = true
                         val meta = activeCalls[currentId]
                         if (meta != null && (meta.state == Call.STATE_DISCONNECTED || meta.state == Call.STATE_DISCONNECTING)) {
-                            Log.d(TAG, "Call $currentId observed as disconnected. Finishing IncomingCallActivity.")
+                            Log.d("[Alibi_FSI]", "Call $currentId observed as disconnected. Finishing IncomingCallActivity.")
                             finish()
                         }
                     } else if (hasObservedCallSession) {
-                        Log.d(TAG, "Call $currentId removed after observation. Finishing IncomingCallActivity.")
+                        Log.d("[Alibi_FSI]", "Call $currentId removed after observation. Finishing IncomingCallActivity.")
                         finish()
                     }
                 }
@@ -62,7 +64,7 @@ class IncomingCallActivity : ComponentActivity() {
                     if (currentCallIdState != null && !hasObservedCallSession) {
                         delay(1500L)
                         if (!hasObservedCallSession) {
-                            Log.w(TAG, "Grace period expired without observing session for $currentCallIdState. Stale launch -> Finishing.")
+                            Log.w("[Alibi_FSI]", "Grace period expired without observing session for $currentCallIdState. Stale launch -> Finishing.")
                             finish()
                         }
                     }
@@ -75,12 +77,40 @@ class IncomingCallActivity : ComponentActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        configureLockscreenFlags()
+        Log.d("[Alibi_FSI]", "IncomingCallActivity.onStart: callId=$currentCallIdState")
+    }
+
+    override fun onResume() {
+        super.onResume()
+        configureLockscreenFlags()
+        requestKeyguardDismissalWithCallback()
+        Log.d("[Alibi_FSI]", "IncomingCallActivity.onResume: callId=$currentCallIdState")
+    }
+
+    override fun onPause() {
+        super.onPause()
+        Log.d("[Alibi_FSI]", "IncomingCallActivity.onPause: callId=$currentCallIdState, isFinishing=$isFinishing")
+    }
+
+    override fun onStop() {
+        super.onStop()
+        Log.d("[Alibi_FSI]", "IncomingCallActivity.onStop: callId=$currentCallIdState")
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        Log.d("[Alibi_FSI]", "IncomingCallActivity.onWindowFocusChanged: hasFocus=$hasFocus, callId=$currentCallIdState")
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         configureLockscreenFlags()
         val newCallId = intent.getStringExtra(TelecomConstants.EXTRA_CALL_ID)
-        Log.d(TAG, "onNewIntent: newCallId=$newCallId")
+        Log.d("[Alibi_FSI]", "IncomingCallActivity.onNewIntent: newCallId=$newCallId")
         if (!newCallId.isNullOrBlank()) {
             currentCallIdState = newCallId
         }
@@ -91,8 +121,6 @@ class IncomingCallActivity : ComponentActivity() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
                 setShowWhenLocked(true)
                 setTurnScreenOn(true)
-                val keyguardManager = getSystemService(KEYGUARD_SERVICE) as? KeyguardManager
-                keyguardManager?.requestDismissKeyguard(this, null)
             } else {
                 @Suppress("DEPRECATION")
                 window.addFlags(
@@ -103,15 +131,38 @@ class IncomingCallActivity : ComponentActivity() {
                 )
             }
             window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-            Log.d(TAG, "configureLockscreenFlags: Successfully set lockscreen & keyguard flags")
+            Log.d("[Alibi_FSI]", "configureLockscreenFlags: Successfully set lockscreen & keyguard flags")
         } catch (e: Exception) {
-            Log.e(TAG, "configureLockscreenFlags: Error setting lockscreen flags", e)
+            Log.e("[Alibi_FSI]", "configureLockscreenFlags: Error setting lockscreen flags", e)
+        }
+    }
+
+    private fun requestKeyguardDismissalWithCallback() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val keyguardManager = getSystemService(KEYGUARD_SERVICE) as? KeyguardManager
+                keyguardManager?.requestDismissKeyguard(this, object : KeyguardManager.KeyguardDismissCallback() {
+                    override fun onDismissSucceeded() {
+                        Log.d("[Alibi_FSI]", "KeyguardDismissCallback: onDismissSucceeded for $currentCallIdState")
+                    }
+
+                    override fun onDismissCancelled() {
+                        Log.d("[Alibi_FSI]", "KeyguardDismissCallback: onDismissCancelled for $currentCallIdState")
+                    }
+
+                    override fun onDismissError() {
+                        Log.e("[Alibi_FSI]", "KeyguardDismissCallback: onDismissError for $currentCallIdState")
+                    }
+                })
+            }
+        } catch (e: Exception) {
+            Log.e("[Alibi_FSI]", "requestKeyguardDismissalWithCallback: Exception requesting dismissal", e)
         }
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        Log.d(TAG, "onDestroy")
+        Log.d("[Alibi_FSI]", "IncomingCallActivity.onDestroy: callId=$currentCallIdState")
     }
 
     companion object {

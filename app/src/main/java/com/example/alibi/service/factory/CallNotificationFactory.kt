@@ -180,9 +180,15 @@ class CallNotificationFactory(private val context: Context) {
         // For non-primary calls, we use a standard notification with action buttons.
         val useCallStyle = isPrimary && (isRinging || isActive)
 
+        val canFsi = canUseFullScreenIntent()
+        Log.d("[Alibi_FSI]", "CallNotificationFactory: isPrimary=$isPrimary, isRinging=$isRinging, canUseFullScreenIntent=$canFsi, channel=$channelId")
+
         // Only push FullScreenIntent / Heads-up alert for Incoming Ringing Calls
-        if (isPrimary && isRinging && canUseFullScreenIntent()) {
+        if (isPrimary && isRinging && canFsi) {
             builder.setFullScreenIntent(pendingIntent, true)
+            Log.d("[Alibi_FSI]", "CallNotificationFactory: setFullScreenIntent attached successfully for $callId")
+        } else if (isRinging) {
+            Log.w("[Alibi_FSI]", "CallNotificationFactory: FullScreenIntent SUPPRESSED for $callId. isPrimary=$isPrimary, isRinging=$isRinging, canUseFullScreenIntent=$canFsi")
         }
 
         when {
