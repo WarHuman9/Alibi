@@ -57,7 +57,12 @@ class InCallActivity : ComponentActivity() {
                 val targetId = currentCallIdState ?: activeCalls.keys.firstOrNull()
 
                 val currentCallMeta = currentCallIdState?.let { activeCalls[it] }
-                val isRinging = currentCallMeta == null || currentCallMeta.state == Call.STATE_RINGING || (currentCallMeta.isSimulated && currentCallMeta.phase == SimulationPhase.RINGING)
+                val isRinging = if (currentCallMeta != null) {
+                    currentCallMeta.state == Call.STATE_RINGING || 
+                    (currentCallMeta.isSimulated && currentCallMeta.phase == SimulationPhase.RINGING)
+                } else {
+                    intent?.getBooleanExtra(TelecomConstants.EXTRA_IS_INCOMING, true) ?: true
+                }
 
                 LaunchedEffect(isRinging) {
                     updateLockscreenFlags(isRinging)
@@ -106,7 +111,12 @@ class InCallActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         val currentCallMeta = currentCallIdState?.let { CallStateManager.activeCalls.value[it] }
-        val isRinging = currentCallMeta == null || currentCallMeta.state == Call.STATE_RINGING || (currentCallMeta.isSimulated && currentCallMeta.phase == SimulationPhase.RINGING)
+        val isRinging = if (currentCallMeta != null) {
+            currentCallMeta.state == Call.STATE_RINGING || 
+            (currentCallMeta.isSimulated && currentCallMeta.phase == SimulationPhase.RINGING)
+        } else {
+            intent?.getBooleanExtra(TelecomConstants.EXTRA_IS_INCOMING, true) ?: true
+        }
         updateLockscreenFlags(isRinging)
         Log.d("[Alibi_FSI]", "InCallActivity.onStart: callId=$currentCallIdState, isRinging=$isRinging")
     }

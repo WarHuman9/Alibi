@@ -261,12 +261,13 @@ fun AlibiApp() {
     val backStack = rememberNavBackStack(MainTabsRoute)
     val activeCalls by CallStateManager.activeCalls.collectAsStateWithLifecycle()
 
-    // Global navigation sync: Navigate to Call Screen ONLY for DIALING, RINGING, or ACTIVE calls
+    // Global navigation sync: Navigate to Call Screen for DIALING, RINGING, ACTIVE, or HOLDING calls
     LaunchedEffect(activeCalls) {
         val callToShow = activeCalls.values.find {
-            it.state == android.telecom.Call.STATE_DIALING ||
-            it.state == android.telecom.Call.STATE_RINGING ||
-            it.state == android.telecom.Call.STATE_ACTIVE
+            it.state == Call.STATE_DIALING ||
+            it.state == Call.STATE_RINGING ||
+            it.state == Call.STATE_ACTIVE ||
+            it.state == Call.STATE_HOLDING
         }
 
         if (callToShow != null) {
@@ -291,10 +292,11 @@ fun AlibiApp() {
                 val recheckedCall = CallStateManager.activeCalls.value.values.find {
                     it.state == Call.STATE_DIALING ||
                     it.state == Call.STATE_RINGING ||
-                    it.state == Call.STATE_ACTIVE
+                    it.state == Call.STATE_ACTIVE ||
+                    it.state == Call.STATE_HOLDING
                 }
                 if (recheckedCall == null && backStack.any { it is ActiveCallRoute }) {
-                    Log.d("AlibiApp", "No active calls detected after 100ms debounce. Clearing backstack to MainTabsRoute.")
+                    Log.d("AlibiApp", "No active or holding calls detected after 100ms debounce. Clearing backstack to MainTabsRoute.")
                     backStack.clear()
                     backStack.add(MainTabsRoute)
                 }

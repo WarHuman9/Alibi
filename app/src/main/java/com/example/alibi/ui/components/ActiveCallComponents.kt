@@ -14,6 +14,7 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CallEnd
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.MicOff
+import androidx.compose.material.icons.rounded.SwapCalls
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -28,25 +29,26 @@ import androidx.compose.ui.zIndex
 import com.example.alibi.telecom.CallStateManager
 
 @Composable
-fun HoldBadge(visible: Boolean) {
+fun HoldBadge(
+    isHolding: Boolean,
+    onToggleHold: () -> Unit
+) {
     val containerColor by animateColorAsState(
-        if (visible) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.1f),
+        if (isHolding) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceVariant,
         label = "containerColor"
     )
     val contentColor by animateColorAsState(
-        if (visible) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.2f),
+        if (isHolding) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurfaceVariant,
         label = "contentColor"
-    )
-    val elevation by animateDpAsState(
-        if (visible) 8.dp else 0.dp,
-        label = "elevation"
     )
 
     Surface(
+        onClick = onToggleHold,
         shape = RoundedCornerShape(24.dp),
         color = containerColor,
-        tonalElevation = elevation,
-        shadowElevation = if (visible) 6.dp else 0.dp,
+        contentColor = contentColor,
+        tonalElevation = 4.dp,
+        shadowElevation = if (isHolding) 6.dp else 2.dp,
         modifier = Modifier
             .padding(top = 32.dp)
             .zIndex(10f)
@@ -56,19 +58,61 @@ fun HoldBadge(visible: Boolean) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
-                imageVector = Icons.Rounded.MicOff,
+                imageVector = if (isHolding) Icons.Rounded.MicOff else Icons.Rounded.Mic,
                 contentDescription = null,
                 modifier = Modifier.size(20.dp),
                 tint = contentColor
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = "CALL ON HOLD",
+                text = if (isHolding) "ON HOLD — TAP TO RESUME" else "HOLD CALL",
                 style = MaterialTheme.typography.labelLarge.copy(
                     fontWeight = FontWeight.ExtraBold,
-                    letterSpacing = 1.2.sp
+                    letterSpacing = 1.1.sp
                 ),
                 color = contentColor
+            )
+        }
+    }
+}
+
+@Composable
+fun MultiCallSwapBanner(
+    holdingCallName: String,
+    holdingCallNumber: String,
+    onSwap: () -> Unit
+) {
+    val displayName = holdingCallName.ifBlank { holdingCallNumber }
+
+    Surface(
+        onClick = onSwap,
+        shape = RoundedCornerShape(24.dp),
+        color = MaterialTheme.colorScheme.primaryContainer,
+        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+        tonalElevation = 8.dp,
+        shadowElevation = 6.dp,
+        modifier = Modifier
+            .padding(top = 32.dp)
+            .zIndex(10f)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.SwapCalls,
+                contentDescription = "Swap Calls",
+                modifier = Modifier.size(20.dp),
+                tint = MaterialTheme.colorScheme.primary
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = "ON HOLD: $displayName — TAP TO SWAP",
+                style = MaterialTheme.typography.labelLarge.copy(
+                    fontWeight = FontWeight.ExtraBold,
+                    letterSpacing = 1.1.sp
+                ),
+                color = MaterialTheme.colorScheme.onPrimaryContainer
             )
         }
     }

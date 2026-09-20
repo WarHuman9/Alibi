@@ -99,6 +99,11 @@ fun ActiveCallScreen(
         lastDurationText = timeText
     }
 
+    val activeCallsMap by CallStateManager.activeCalls.collectAsStateWithLifecycle()
+    val holdingCall = activeCallsMap.values.find {
+        it.id != callId && (it.isHolding || it.state == Call.STATE_HOLDING)
+    }
+
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         floatingActionButton = {
@@ -131,7 +136,30 @@ fun ActiveCallScreen(
                     .align(Alignment.TopCenter),
                 contentAlignment = Alignment.TopCenter
             ) {
-                HoldBadge(visible = isHolding)
+                if (holdingCall != null) {
+                    MultiCallSwapBanner(
+                        holdingCallName = holdingCall.name,
+                        holdingCallNumber = holdingCall.number,
+                        onSwap = {
+                            Log.d("Alibi_UI", "MultiCallSwapBanner: Swapping active call $callId with holding call ${holdingCall.id}")
+                            CallStateManager.hold(callId)
+                            CallStateManager.resume(holdingCall.id)
+                        }
+                    )
+                } else {
+                    HoldBadge(
+                        isHolding = isHolding,
+                        onToggleHold = {
+                            if (isHolding) {
+                                Log.d("Alibi_UI", "HoldBadge: Resuming call $callId")
+                                CallStateManager.resume(callId)
+                            } else {
+                                Log.d("Alibi_UI", "HoldBadge: Holding call $callId")
+                                CallStateManager.hold(callId)
+                            }
+                        }
+                    )
+                }
             }
 
             val contentScale = if (isExpanded) 1.2f else 1f
