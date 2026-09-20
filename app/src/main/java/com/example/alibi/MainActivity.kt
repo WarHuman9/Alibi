@@ -114,7 +114,7 @@ class MainActivity : ComponentActivity() {
 
     private fun configureLockscreenFlags() {
         // MainActivity does not request lockscreen or keyguard bypass.
-        // Lockscreen display is handled exclusively by IncomingCallActivity.
+        // Lockscreen display is handled exclusively by InCallActivity.
     }
 
     /**

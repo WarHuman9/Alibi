@@ -70,13 +70,14 @@
         </activity>
 
         <activity
-            android:name=".ui.IncomingCallActivity"
+            android:name=".ui.InCallActivity"
             android:exported="false"
             android:showWhenLocked="true"
             android:turnScreenOn="true"
             android:excludeFromRecents="true"
-            android:launchMode="singleInstance"
-            android:theme="@style/Theme.Alibi" />
+            android:launchMode="singleTask"
+            android:taskAffinity="com.example.alibi.incall"
+            android:theme="@style/Theme.Alibi.InCall" />
 
         <service
             android:name=".service.CallService"

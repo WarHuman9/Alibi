@@ -8,6 +8,7 @@ import android.telecom.Call
 import android.util.Log
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.*
@@ -24,9 +25,9 @@ import kotlinx.coroutines.launch
 
 /**
  * Dedicated lightweight Activity for lockscreen call display and FullScreenIntent launches.
- * Free from onboarding, main tabs backstack, or heavy ViewModel overhead.
+ * Renders [ActiveCallScreen] for ALL call origins and states (Incoming, Outgoing, Active, Holding).
  */
-class IncomingCallActivity : ComponentActivity() {
+class InCallActivity : ComponentActivity() {
 
     private var currentCallIdState by mutableStateOf<String?>(null)
     private val proximityController by lazy { ProximityController(this) }
@@ -46,7 +47,7 @@ class IncomingCallActivity : ComponentActivity() {
         currentCallIdState = initialId
         
         val keyguardManager = getSystemService(KEYGUARD_SERVICE) as? KeyguardManager
-        Log.d("[Alibi_FSI]", "IncomingCallActivity.onCreate: callId=$initialId, action=${intent?.action}, flags=${intent?.flags}, isKeyguardLocked=${keyguardManager?.isKeyguardLocked}, isKeyguardSecure=${keyguardManager?.isKeyguardSecure}")
+        Log.d("[Alibi_FSI]", "InCallActivity.onCreate: callId=$initialId, action=${intent?.action}, flags=${intent?.flags}, isKeyguardLocked=${keyguardManager?.isKeyguardLocked}, isKeyguardSecure=${keyguardManager?.isKeyguardSecure}")
 
         setContent {
             AlibiTheme {
@@ -68,11 +69,11 @@ class IncomingCallActivity : ComponentActivity() {
                         hasObservedCallSession = true
                         val meta = activeCalls[currentId]
                         if (meta != null && (meta.state == Call.STATE_DISCONNECTED || meta.state == Call.STATE_DISCONNECTING)) {
-                            Log.d("[Alibi_FSI]", "Call $currentId observed as disconnected. Finishing IncomingCallActivity.")
+                            Log.d("[Alibi_FSI]", "Call $currentId observed as disconnected. Finishing InCallActivity.")
                             finishAndRemoveTask()
                         }
                     } else if (hasObservedCallSession) {
-                        Log.d("[Alibi_FSI]", "Call $currentId removed after observation. Finishing IncomingCallActivity.")
+                        Log.d("[Alibi_FSI]", "Call $currentId removed after observation. Finishing InCallActivity.")
                         finishAndRemoveTask()
                     }
                 }
@@ -88,6 +89,13 @@ class IncomingCallActivity : ComponentActivity() {
                     }
                 }
 
+                // Lockscreen Back Button Interception: Trigger native PIN/Pattern unlock prompt when Back is pressed on locked device
+                val isLocked = keyguardManager?.isKeyguardLocked ?: false
+                BackHandler(enabled = isLocked) {
+                    Log.d("[Alibi_FSI]", "Back button pressed on lockscreen. Triggering PIN/Pattern unlock prompt.")
+                    requestKeyguardDismissalWithCallback()
+                }
+
                 if (targetId != null) {
                     ActiveCallScreen(callId = targetId)
                 }
@@ -97,36 +105,37 @@ class IncomingCallActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
-        updateLockscreenFlags(true)
-        Log.d("[Alibi_FSI]", "IncomingCallActivity.onStart: callId=$currentCallIdState")
+        val currentCallMeta = currentCallIdState?.let { CallStateManager.activeCalls.value[it] }
+        val isRinging = currentCallMeta == null || currentCallMeta.state == Call.STATE_RINGING || (currentCallMeta.isSimulated && currentCallMeta.phase == SimulationPhase.RINGING)
+        updateLockscreenFlags(isRinging)
+        Log.d("[Alibi_FSI]", "InCallActivity.onStart: callId=$currentCallIdState, isRinging=$isRinging")
     }
 
     override fun onResume() {
         super.onResume()
-        requestKeyguardDismissalWithCallback()
-        Log.d("[Alibi_FSI]", "IncomingCallActivity.onResume: callId=$currentCallIdState")
+        Log.d("[Alibi_FSI]", "InCallActivity.onResume: callId=$currentCallIdState")
     }
 
     override fun onPause() {
         super.onPause()
-        Log.d("[Alibi_FSI]", "IncomingCallActivity.onPause: callId=$currentCallIdState, isFinishing=$isFinishing")
+        Log.d("[Alibi_FSI]", "InCallActivity.onPause: callId=$currentCallIdState, isFinishing=$isFinishing")
     }
 
     override fun onStop() {
         super.onStop()
-        Log.d("[Alibi_FSI]", "IncomingCallActivity.onStop: callId=$currentCallIdState")
+        Log.d("[Alibi_FSI]", "InCallActivity.onStop: callId=$currentCallIdState")
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        Log.d("[Alibi_FSI]", "IncomingCallActivity.onWindowFocusChanged: hasFocus=$hasFocus, callId=$currentCallIdState")
+        Log.d("[Alibi_FSI]", "InCallActivity.onWindowFocusChanged: hasFocus=$hasFocus, callId=$currentCallIdState")
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         val newCallId = intent.getStringExtra(TelecomConstants.EXTRA_CALL_ID)
-        Log.d("[Alibi_FSI]", "IncomingCallActivity.onNewIntent: newCallId=$newCallId")
+        Log.d("[Alibi_FSI]", "InCallActivity.onNewIntent: newCallId=$newCallId")
         if (!newCallId.isNullOrBlank()) {
             currentCallIdState = newCallId
         }
@@ -142,8 +151,7 @@ class IncomingCallActivity : ComponentActivity() {
                 if (isRinging) {
                     window.addFlags(
                         WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
-                        WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
-                        WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD
+                        WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
                     )
                 } else {
                     window.clearFlags(WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON)
@@ -186,10 +194,10 @@ class IncomingCallActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         proximityController.stop()
-        Log.d("[Alibi_FSI]", "IncomingCallActivity.onDestroy: callId=$currentCallIdState")
+        Log.d("[Alibi_FSI]", "InCallActivity.onDestroy: callId=$currentCallIdState")
     }
 
     companion object {
-        private const val TAG = "IncomingCallActivity"
+        private const val TAG = "InCallActivity"
     }
 }
