@@ -105,7 +105,6 @@ class InCallActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        requestKeyguardDismissalWithCallback()
         Log.d("[Alibi_FSI]", "InCallActivity.onResume: callId=$currentCallIdState")
     }
 
@@ -144,8 +143,7 @@ class InCallActivity : ComponentActivity() {
                 if (isRinging) {
                     window.addFlags(
                         WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
-                        WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
-                        WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD
+                        WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
                     )
                 } else {
                     window.clearFlags(WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON)
@@ -159,29 +157,6 @@ class InCallActivity : ComponentActivity() {
             Log.d("[Alibi_FSI]", "updateLockscreenFlags: isRinging=$isRinging")
         } catch (e: Exception) {
             Log.e("[Alibi_FSI]", "updateLockscreenFlags: Error updating lockscreen flags", e)
-        }
-    }
-
-    private fun requestKeyguardDismissalWithCallback() {
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                val keyguardManager = getSystemService(KEYGUARD_SERVICE) as? KeyguardManager
-                keyguardManager?.requestDismissKeyguard(this, object : KeyguardManager.KeyguardDismissCallback() {
-                    override fun onDismissSucceeded() {
-                        Log.d("[Alibi_FSI]", "KeyguardDismissCallback: onDismissSucceeded for $currentCallIdState")
-                    }
-
-                    override fun onDismissCancelled() {
-                        Log.d("[Alibi_FSI]", "KeyguardDismissCallback: onDismissCancelled for $currentCallIdState")
-                    }
-
-                    override fun onDismissError() {
-                        Log.e("[Alibi_FSI]", "KeyguardDismissCallback: onDismissError for $currentCallIdState")
-                    }
-                })
-            }
-        } catch (e: Exception) {
-            Log.e("[Alibi_FSI]", "requestKeyguardDismissalWithCallback: Exception requesting dismissal", e)
         }
     }
 
