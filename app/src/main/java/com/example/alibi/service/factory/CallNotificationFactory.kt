@@ -12,7 +12,7 @@ import androidx.core.app.NotificationCompat
 
 import com.example.alibi.receiver.CallActionReceiver
 import com.example.alibi.telecom.TelecomConstants
-import com.example.alibi.ui.IncomingCallActivity
+import com.example.alibi.ui.InCallActivity
 
 class CallNotificationFactory(private val context: Context) {
 
@@ -74,7 +74,7 @@ class CallNotificationFactory(private val context: Context) {
     }
 
     private fun createContentIntent(callId: String): PendingIntent {
-        val intent = Intent(context, IncomingCallActivity::class.java).apply {
+        val intent = Intent(context, InCallActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_USER_ACTION
             putExtra(TelecomConstants.EXTRA_CALL_ID, callId)
             putExtra(TelecomConstants.EXTRA_REAL_CALL, true)

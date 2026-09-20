@@ -1,4 +1,10 @@
 <resources>
 
     <style name="Theme.Alibi" parent="Theme.MaterialComponents.Light" />
+
+    <style name="Theme.Alibi.InCall" parent="Theme.Alibi">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowDisablePreview">true</item>
+    </style>
 </resources>

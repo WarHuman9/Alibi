@@ -23,6 +23,7 @@ import com.example.alibi.telecom.CallRepository
 import com.example.alibi.telecom.CallStateManager
 import com.example.alibi.telecom.SimulationPhase
 import com.example.alibi.telecom.TelecomConstants
+import com.example.alibi.ui.InCallActivity
 import com.example.alibi.util.ProximityController
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -64,6 +65,7 @@ class CallNotificationService : Service() {
         notificationFactory = CallNotificationFactory(this)
         
         createNotificationChannels()
+        registerScreenWakeReceiver()
 
         val powerManager = getSystemService(POWER_SERVICE) as PowerManager
         wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, TelecomConstants.WAKE_LOCK_TAG).apply {
@@ -529,6 +531,74 @@ class CallNotificationService : Service() {
     private var activeRingtone: Ringtone? = null
     private var screenWakeLock: PowerManager.WakeLock? = null
     private var isVolumeReceiverRegistered = false
+    private var isScreenWakeReceiverRegistered = false
+
+    private val screenWakeReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action == Intent.ACTION_SCREEN_ON) {
+                val activeCalls = CallStateManager.activeCalls.value.values
+                val hasRingingDialingOrActiveCall = activeCalls.any {
+                    it.state == Call.STATE_RINGING ||
+                    it.state == Call.STATE_DIALING ||
+                    it.state == Call.STATE_CONNECTING ||
+                    it.state == Call.STATE_ACTIVE ||
+                    (it.isSimulated && (it.phase == SimulationPhase.RINGING || it.phase == SimulationPhase.DIALING || it.phase == SimulationPhase.SIMULATED_ACTIVE))
+                }
+
+                val keyguardManager = getSystemService(KEYGUARD_SERVICE) as? KeyguardManager
+                val isLocked = keyguardManager?.isKeyguardLocked ?: true
+
+                Log.d("[Alibi_FSI]", "screenWakeReceiver.onReceive: ACTION_SCREEN_ON received. hasRingingDialingOrActiveCall=$hasRingingDialingOrActiveCall, isKeyguardLocked=$isLocked")
+
+                if (hasRingingDialingOrActiveCall && isLocked) {
+                    val primaryCall = activeCalls.find {
+                        it.state == Call.STATE_RINGING ||
+                        it.state == Call.STATE_DIALING ||
+                        it.state == Call.STATE_CONNECTING ||
+                        it.state == Call.STATE_ACTIVE
+                    } ?: activeCalls.firstOrNull()
+                    if (primaryCall != null) {
+                        val launchIntent = Intent(context, InCallActivity::class.java).apply {
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_USER_ACTION or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                            putExtra(TelecomConstants.EXTRA_CALL_ID, primaryCall.id)
+                        }
+                        try {
+                            context.startActivity(launchIntent)
+                            Log.d("[Alibi_FSI]", "screenWakeReceiver: Successfully re-launched InCallActivity on screen wake for ${primaryCall.id}")
+                        } catch (e: Exception) {
+                            Log.e("[Alibi_FSI]", "screenWakeReceiver: Error launching InCallActivity on screen wake", e)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun registerScreenWakeReceiver() {
+        if (!isScreenWakeReceiverRegistered) {
+            try {
+                val filter = IntentFilter(Intent.ACTION_SCREEN_ON)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    registerReceiver(screenWakeReceiver, filter, RECEIVER_EXPORTED)
+                } else {
+                    registerReceiver(screenWakeReceiver, filter)
+                }
+                isScreenWakeReceiverRegistered = true
+                Log.d("[Alibi_FSI]", "registerScreenWakeReceiver: Successfully registered ACTION_SCREEN_ON receiver")
+            } catch (e: Exception) {
+                Log.e("[Alibi_FSI]", "registerScreenWakeReceiver: Error registering screen wake receiver", e)
+            }
+        }
+    }
+
+    private fun unregisterScreenWakeReceiver() {
+        if (isScreenWakeReceiverRegistered) {
+            try {
+                unregisterReceiver(screenWakeReceiver)
+            } catch (_: Exception) {}
+            isScreenWakeReceiverRegistered = false
+        }
+    }
 
     private val volumeKeyReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -656,6 +726,7 @@ class CallNotificationService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        unregisterScreenWakeReceiver()
         audioHeartbeatManager.stop()
         unregisterVolumeReceiver()
         handleRingtoneAndWakeLock(false)
