@@ -8,6 +8,7 @@ import android.telecom.Call
 import android.util.Log
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.*
@@ -88,6 +89,13 @@ class InCallActivity : ComponentActivity() {
                     }
                 }
 
+                // Lockscreen Back Button Interception: Trigger native PIN/Pattern unlock prompt when Back is pressed on locked device
+                val isLocked = keyguardManager?.isKeyguardLocked ?: false
+                BackHandler(enabled = isLocked) {
+                    Log.d("[Alibi_FSI]", "Back button pressed on lockscreen. Triggering PIN/Pattern unlock prompt.")
+                    requestKeyguardDismissalWithCallback()
+                }
+
                 if (targetId != null) {
                     ActiveCallScreen(callId = targetId)
                 }
@@ -157,6 +165,29 @@ class InCallActivity : ComponentActivity() {
             Log.d("[Alibi_FSI]", "updateLockscreenFlags: isRinging=$isRinging")
         } catch (e: Exception) {
             Log.e("[Alibi_FSI]", "updateLockscreenFlags: Error updating lockscreen flags", e)
+        }
+    }
+
+    private fun requestKeyguardDismissalWithCallback() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val keyguardManager = getSystemService(KEYGUARD_SERVICE) as? KeyguardManager
+                keyguardManager?.requestDismissKeyguard(this, object : KeyguardManager.KeyguardDismissCallback() {
+                    override fun onDismissSucceeded() {
+                        Log.d("[Alibi_FSI]", "KeyguardDismissCallback: onDismissSucceeded for $currentCallIdState")
+                    }
+
+                    override fun onDismissCancelled() {
+                        Log.d("[Alibi_FSI]", "KeyguardDismissCallback: onDismissCancelled for $currentCallIdState")
+                    }
+
+                    override fun onDismissError() {
+                        Log.e("[Alibi_FSI]", "KeyguardDismissCallback: onDismissError for $currentCallIdState")
+                    }
+                })
+            }
+        } catch (e: Exception) {
+            Log.e("[Alibi_FSI]", "requestKeyguardDismissalWithCallback: Exception requesting dismissal", e)
         }
     }
 
