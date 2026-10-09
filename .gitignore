@@ -11,4 +11,3 @@ local.properties
 /.artifacts/
 /.agent/
 /.kotlin/
-/app/src/main/.agent/
