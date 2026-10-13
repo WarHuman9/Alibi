@@ -1,6 +1,8 @@
 # Alibi 📞
 
 <div align="center">
+
+![Alibi App Icon](app/src/main/res/mipmap-xxhdpi/ic_launcher.webp)
 <p>
 
 [![Kotlin](https://img.shields.io/badge/Language-Kotlin%202.1.20-7F52FF.svg?style=flat-square&logo=kotlin&logoColor=white)](https://kotlinlang.org)
@@ -13,6 +15,7 @@
 
 </p>
 </div>
+
 ---
 
 **Alibi** is a modern, high-reliability Android application designed for advanced telephony management and realistic simulated calls. Built from the ground up using modern Android architecture, standard Jetpack libraries, and Android's native **Telecom Framework**, Alibi provides a seamless call UI, system-integrated call logging, background audio session management, and rock-solid lockscreen full-screen intent (FSI) delivery.
