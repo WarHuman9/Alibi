@@ -3,7 +3,7 @@
 <!--suppress HtmlDeprecatedAttribute -->
 <div align="center">
 
-<img src="assets/img.png" alt="Alibi App Icon" height="413" width="409" style="margin-bottom: 16px;" />
+<img src="assets/img.png" alt="Alibi App Icon" height="256" width="256" style="margin-bottom: 16px;" />
 
 <br>
 <br>
@@ -15,7 +15,7 @@
 [![Jetpack Compose](https://img.shields.io/badge/UI-Jetpack%20Compose-4285F4.svg?style=flat-square&logo=jetpackcompose&logoColor=white)](https://developer.android.com/jetpack/compose)
 [![Telecom API](https://img.shields.io/badge/API-Android%20Telecom%201.0.1-00897B.svg?style=flat-square&logo=android&logoColor=white)](https://developer.android.com/guide/topics/connectivity/telecom)
 [![Target SDK](https://img.shields.io/badge/Target%20SDK-37%20(Android%2016)-2563EB.svg?style=flat-square&logo=android&logoColor=white)](https://developer.android.com/about/versions/16)
-[![Min SDK](https://img.shields.io/badge/Min%20SDK-24-F59E0B.svg?style=flat-square)](https://developer.android.com/about/dashboards)
+[![Min SDK](https://img.shields.io/badge/Min%20SDK-24-F59E0B.svg?style=flat-square)](https://developer.android.com/about/versions/nougat/)
 [![License: PolyForm Noncommercial](https://img.shields.io/badge/License-PolyForm%20Noncommercial%201.0.0-blue.svg?style=flat-square)](LICENSE)
 
 </p>
@@ -139,8 +139,8 @@ Android 12+ introduced `Notification.CallStyle` to provide standardized native c
 
 ### 2. Fixing the System Timer Bar / Chip Issue (Connecting State)
 A common bug in Android call apps is status bar chips counting elapsed call duration prematurely while a call is still dialing or connecting ("Calling...").
-* **Connecting State:** During `DIALING` or `CONNECTING` states, Alibi explicitly suppresses the chronometer by calling `setUsesChronometer(false)` and `setShowWhen(false)`.
-* **Active State:** The chronometer (`setUsesChronometer(true)`) and elapsed timestamp (`setWhen(startTime)`) are enabled **only** after the call transitions to `STATE_ACTIVE` (`startTime > 0L`), ensuring accurate status bar call chips.
+* **Connecting State:** During `DIALING` or `CONNECTING` states, Alibi explicitly suppresses the chronometer by calling `setUsesChronometer(false)` , `setShowWhen(false)` and use a **Standard Notification**.
+* **Active State:** The chronometer (`setUsesChronometer(true)`) and elapsed timestamp (`setWhen(startTime)`) are enabled **only** after the call transitions to `STATE_ACTIVE` (`startTime > 0L`), And the notification is transition to `Notification.CallStyle` ensuring accurate status bar call chips.
 
 ### 3. Eliminating Zombie Notifications
 Zombie notifications (stale or stuck notifications that persist after a call ends) are completely eliminated through four architectural layers:
@@ -257,6 +257,7 @@ To function as a complete default dialer and simulated call manager, Alibi reque
 * `android.permission.READ_CALL_LOG` & `WRITE_CALL_LOG`
 * `android.permission.POST_NOTIFICATIONS`
 * `android.permission.USE_FULL_SCREEN_INTENT`
+    *(Strict android devices may need extra permissions like **"Show on Lock Screen", "background-start", "Lock-screen permissions"** etc. Which are needed for lock-screen access & cold-start granting)*
 * `android.permission.FOREGROUND_SERVICE_PHONE_CALL` & `FOREGROUND_SERVICE_MICROPHONE`
 
 ---
