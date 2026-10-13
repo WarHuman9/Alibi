@@ -2,7 +2,10 @@
 
 <div align="center">
 
-![Alibi App Icon](app/src/main/res/mipmap-xxhdpi/ic_launcher.webp)
+<img src="assets/img.png" alt="Alibi App Icon" width="192" />
+
+<br>
+
 <p>
 
 [![Kotlin](https://img.shields.io/badge/Language-Kotlin%202.1.20-7F52FF.svg?style=flat-square&logo=kotlin&logoColor=white)](https://kotlinlang.org)
