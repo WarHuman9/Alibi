@@ -37,7 +37,7 @@
 -keep class * extends android.telecom.InCallService { *; }
 -keep class * extends android.telecom.Connection { *; }
 # Keep the entire telecom package for reflection-safe service interactions
--keep class com.example.alibi.telecom.** { *; }
+-keep class com.warhuman.alibi.telecom.** { *; }
 
 # --- Kotlin Coroutines ---
 -keepnames class kotlinx.coroutines.internal.MainDispatcherFactory {}
@@ -47,8 +47,8 @@
 
 # --- General Project Specifics ---
 # Ensure all route data classes are kept for navigation stability
--keep class com.example.alibi.ui.**Route { *; }
--keep class com.example.alibi.ui.MainTabsRoute { *; }
+-keep class com.warhuman.alibi.ui.**Route { *; }
+-keep class com.warhuman.alibi.ui.MainTabsRoute { *; }
 
 # --- Android Standard ---
 -keep public class * extends android.app.Service

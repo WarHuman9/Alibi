@@ -7,7 +7,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.alibi"
+    namespace = "com.warhuman.alibi"
     compileSdk = 37
 
     val localProperties = Properties()
@@ -17,11 +17,11 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.example.alibi"
+        applicationId = "com.warhuman.alibi"
         minSdk = 24
         targetSdk = 37
         versionCode = 1
-        versionName = "1.0"
+        versionName = "v1.1-release"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
