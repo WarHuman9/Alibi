@@ -76,7 +76,7 @@
             android:turnScreenOn="true"
             android:excludeFromRecents="true"
             android:launchMode="singleTask"
-            android:taskAffinity="com.example.alibi.incall"
+            android:taskAffinity="com.warhuman.alibi.incall"
             android:theme="@style/Theme.Alibi.InCall" />
 
         <service
