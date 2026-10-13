@@ -1,9 +1,11 @@
 # Alibi 📞
 
+<!--suppress HtmlDeprecatedAttribute -->
 <div align="center">
 
-<img src="assets/img.png" alt="Alibi App Icon" width="192" />
+<img src="assets/img.png" alt="Alibi App Icon" height="413" width="409" style="margin-bottom: 16px;" />
 
+<br>
 <br>
 
 <p>
@@ -14,7 +16,7 @@
 [![Telecom API](https://img.shields.io/badge/API-Android%20Telecom%201.0.1-00897B.svg?style=flat-square&logo=android&logoColor=white)](https://developer.android.com/guide/topics/connectivity/telecom)
 [![Target SDK](https://img.shields.io/badge/Target%20SDK-37%20(Android%2016)-2563EB.svg?style=flat-square&logo=android&logoColor=white)](https://developer.android.com/about/versions/16)
 [![Min SDK](https://img.shields.io/badge/Min%20SDK-24-F59E0B.svg?style=flat-square)](https://developer.android.com/about/dashboards)
-[![License: MIT](https://img.shields.io/badge/License-MIT-10B981.svg?style=flat-square)](LICENSE)
+[![License: PolyForm Noncommercial](https://img.shields.io/badge/License-PolyForm%20Noncommercial%201.0.0-blue.svg?style=flat-square)](LICENSE)
 
 </p>
 </div>
@@ -27,14 +29,14 @@
 
 ## 🛠 Tech Stack & Core Resources
 
-| Resource / Component | Role & Usage in Alibi |
-| :--- | :--- |
-| **Pure Kotlin** | Written 100% in idiomatic Kotlin utilizing Kotlin Coroutines (`StateFlow`, `SharedFlow`, `SupervisorJob`, `Mutex`) for structured concurrency and reactive state management. |
-| **Jetpack Compose Ecosystem** | Modern declarative UI powered by **Compose Material 3**, **Jetpack Navigation 3**, **Material 3 Adaptive Layouts**, and `Lifecycle` integration. |
-| **Telecom API (`InCallService`)** | `CallService` binds to Android's native Telecom manager to manage real phone calls, capture call events, and act as a Default Dialer UI. |
+| Resource / Component                  | Role & Usage in Alibi                                                                                                                                                           |
+|:--------------------------------------|:--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **Pure Kotlin**                       | Written 100% in idiomatic Kotlin utilizing Kotlin Coroutines (`StateFlow`, `SharedFlow`, `SupervisorJob`, `Mutex`) for structured concurrency and reactive state management.    |
+| **Jetpack Compose Ecosystem**         | Modern declarative UI powered by **Compose Material 3**, **Jetpack Navigation 3**, **Material 3 Adaptive Layouts**, and `Lifecycle` integration.                                |
+| **Telecom API (`InCallService`)**     | `CallService` binds to Android's native Telecom manager to manage real phone calls, capture call events, and act as a Default Dialer UI.                                        |
 | **Telecom API (`ConnectionService`)** | `SimulatedConnectionService` registers a self-managed `PhoneAccount` (`CAPABILITY_SELF_MANAGED`) to drive native-like simulated calls through Android's telephony architecture. |
-| **Foreground Services** | `CallNotificationService` enforces Android 14/15/16 Foreground Service (FGS) compliance (`phoneCall`, `microphone`) with synchronous `startForeground` execution. |
-| **Audio & Sensor Hardware** | Integrated `ProximityController` (Proximity Sensor management) and `AudioHeartbeatManager` (AudioTrack heartbeat) for hardware-level call behavior. |
+| **Foreground Services**               | `CallNotificationService` enforces Android 14/15/16 Foreground Service (FGS) compliance (`phoneCall`, `microphone`) with synchronous `startForeground` execution.               |
+| **Audio & Sensor Hardware**           | Integrated `ProximityController` (Proximity Sensor management) and `AudioHeartbeatManager` (AudioTrack heartbeat) for hardware-level call behavior.                             |
 
 ### 💡 Why This Architecture?
 * **System Native Integration:** Rather than displaying floating overlays or fake screens that break when navigating away or locking the device, Alibi plugs directly into Android's native `TelecomManager`.
@@ -230,11 +232,16 @@ Currently, Alibi is in active development and has not yet been published to publ
    ```bash
    ./gradlew assembleDebug
    ```
+   *OR*
+   ```bash
+   ./gradlew :app:assembleRelease
+   ```
 
 3. **Install on connected device via ADB:**
    ```bash
    adb install app/build/outputs/apk/debug/app-debug.apk
    ```
+   * *(Change ``` debug ``` to ```release``` , if you want to release-build)*
 
 ### Releases
 Pre-built APK files for releases can be downloaded from the **GitHub Repository Releases** tab when available.
@@ -256,4 +263,8 @@ To function as a complete default dialer and simulated call manager, Alibi reque
 
 ## 📄 License
 
-This project is licensed under the [MIT License](LICENSE) (or applicable open-source license).
+This project is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE).
+
+<br>
+<br>
+
