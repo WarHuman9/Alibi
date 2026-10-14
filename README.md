@@ -224,7 +224,7 @@ Currently, Alibi is in active development and has not yet been published to publ
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/your-username/Alibi.git
+   git clone https://github.com/WarHuman9/Alibi.git
    cd Alibi
    ```
 
