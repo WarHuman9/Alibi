@@ -150,7 +150,7 @@ class CallNotificationFactory(private val context: Context) {
             .setContentIntent(pendingIntent)
             .setOngoing(!isMissed)
             .setLocalOnly(true)
-            .setOnlyAlertOnce(!isRinging)
+            .setOnlyAlertOnce(true)
             .setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
             .setCategory(Notification.CATEGORY_CALL)
             .setVisibility(Notification.VISIBILITY_PUBLIC)
@@ -255,6 +255,7 @@ class CallNotificationFactory(private val context: Context) {
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setCategory(Notification.CATEGORY_CALL)
             .setOngoing(!isMissed)
+            .setOnlyAlertOnce(true)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, if (isMissed) "Dismiss" else "Hangup", hangupIntent)
             .apply {
                 if (isIncoming && !isMissed) addAction(android.R.drawable.ic_menu_call, "Answer", answerIntent)
