@@ -240,7 +240,7 @@ Currently, Alibi is in active development and has not yet been published to publ
    ```bash
    adb install app/build/outputs/apk/debug/app-debug.apk
    ```
-   * *(Change ``` debug ``` to ```release``` , if you want to release-build and update the __SignConfig__ in ```local.properties```)*
+   * *(Change ``` debug ``` to ```release``` , if you want to release-build and update the ```local.properties``` file)*
 
 ### Releases
 Pre-built APK files for releases can be downloaded from the **GitHub Repository Releases** tab when available.
