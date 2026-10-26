@@ -51,7 +51,8 @@ class CallNotificationService : Service() {
         val isMissed: Boolean,
         val isDialing: Boolean,
         val isSimulated: Boolean,
-        val startTime: Long
+        val startTime: Long,
+        val isRejected: Boolean = false
     )
 
     override fun onCreate() {
@@ -119,7 +120,8 @@ class CallNotificationService : Service() {
                                         isMissed = meta.type == android.provider.CallLog.Calls.MISSED_TYPE,
                                         isDialing = if (meta.isSimulated) meta.phase == com.warhuman.alibi.telecom.SimulationPhase.DIALING else (meta.state == android.telecom.Call.STATE_DIALING || meta.state == android.telecom.Call.STATE_CONNECTING),
                                         isSimulated = meta.isSimulated,
-                                        startTime = meta.answerTime
+                                        startTime = meta.answerTime,
+                                        isRejected = meta.type == android.provider.CallLog.Calls.REJECTED_TYPE
                                     )
 
                                     if (newState == lastNotificationStates[id]) return@collect
@@ -425,8 +427,8 @@ class CallNotificationService : Service() {
                 handleRingtoneAndWakeLock(false)
             }
 
-            // Post Missed Call Notification for unanswered incoming calls
-            if (lastState != null && lastState.isIncoming && !lastState.isMissed && lastState.startTime == 0L) {
+            // Post Missed Call Notification for unanswered incoming calls (not rejected)
+            if (lastState != null && lastState.isIncoming && !lastState.isMissed && !lastState.isRejected && lastState.startTime == 0L) {
                 val missedNotification = notificationFactory.createMissedCallNotification(
                     phoneNumber = lastState.phoneNumber,
                     name = lastState.name,
@@ -736,6 +738,7 @@ class CallNotificationService : Service() {
         }
         try { notificationManager.cancel(NOTIFICATION_ID) } catch (_: Exception) {}
 
+        CallStateManager.onSilenceRingtoneRequested = null
         activeNotificationIds.clear()
         activeNotifications.clear()
         lastNotificationStates.clear()

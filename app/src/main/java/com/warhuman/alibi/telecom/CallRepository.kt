@@ -30,9 +30,13 @@ object CallRepository {
             val meta = session.metadata.value
             
             val optimisticId = if (isConcrete) {
-                current.entries.find { (_, s) ->
-                    s is OptimisticCallSession && s.metadata.value.number == meta.number
-                }?.key
+                if (current[session.id] is OptimisticCallSession) {
+                    session.id
+                } else {
+                    current.entries.find { (_, s) ->
+                        s is OptimisticCallSession && s.metadata.value.number == meta.number
+                    }?.key
+                }
             } else null
 
             if (optimisticId != null) {

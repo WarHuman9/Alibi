@@ -54,7 +54,7 @@ object SimulationController {
         if (request.direction == android.provider.CallLog.Calls.OUTGOING_TYPE) {
             setAutoAnswerDelay(id, request.autoAnswerDelay)
         } else if (request.direction == android.provider.CallLog.Calls.MISSED_TYPE) {
-            val ringingTime = request.duration?.toInt() ?: 20
+            val ringingTime = request.duration?.coerceIn(0L, 86400L)?.toInt() ?: 20
             setAutoMissDelay(id, ringingTime)
         }
 
@@ -111,9 +111,10 @@ object SimulationController {
         CallStateManager.updateCallState(id, Call.STATE_ACTIVE, SimulationPhase.SIMULATED_ACTIVE)
         AudioHeartbeatManager.getInstance(connection.context).start()
 
-        // Start duration timer
-        connection.request.duration?.takeIf { it > 0 }?.let { duration ->
-            startTimer(id, "duration", duration * 1000L) {
+        // Start duration timer (capped at 24 hours to prevent arithmetic overflow)
+        connection.request.duration?.takeIf { it > 0 }?.let { rawDuration ->
+            val durationMs = rawDuration.coerceIn(0L, 86400L) * 1000L
+            startTimer(id, "duration", durationMs) {
                 Log.d(TAG, "Intended duration reached for $id. Hanging up.")
                 disconnectSimulatedCall(id, userInitiated = false)
             }
@@ -129,6 +130,10 @@ object SimulationController {
         }
         Log.d(TAG, "disconnectSimulatedCall: $id (userInitiated=$userInitiated)")
         
+        if (connection.request.direction == android.provider.CallLog.Calls.INCOMING_TYPE && userInitiated && isSimulationAnswered[id]?.get() == false) {
+            CallStateManager.updateCallState(id, Call.STATE_DISCONNECTED, SimulationPhase.DISCONNECTED, android.provider.CallLog.Calls.REJECTED_TYPE)
+        }
+
         // Use connection.terminate() to ensure consistent cleanup path
         connection.terminate(userInitiated)
     }

@@ -334,9 +334,11 @@ class TelecomHelper(private val context: Context) {
                 telecomManager.placeCall(uri, extras)
             } else {
                 Log.e(TAG, "Missing CALL_PHONE permission for real call")
+                throw SecurityException("Missing CALL_PHONE permission for real call")
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to place real call", e)
+            throw e
         }
     }
 

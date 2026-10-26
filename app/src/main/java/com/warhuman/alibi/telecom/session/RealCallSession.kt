@@ -24,6 +24,7 @@ class RealCallSession(
     private val callback = object : Call.Callback() {
         override fun onStateChanged(call: Call, state: Int) {
             updateMetadata()
+            CallStateManager.onCallStateChangedHook?.invoke(call, state)
             if (state == Call.STATE_DISCONNECTED || state == Call.STATE_DISCONNECTING) {
                 CallStateManager.removeCall(id)
             }

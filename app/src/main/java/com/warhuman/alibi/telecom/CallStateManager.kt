@@ -2,6 +2,7 @@ package com.warhuman.alibi.telecom
 
 import android.telecom.Call
 import android.util.Log
+import com.warhuman.alibi.telecom.session.OptimisticCallSession
 import com.warhuman.alibi.telecom.session.RealCallSession
 import com.warhuman.alibi.util.getAlibiId
 import kotlinx.collections.immutable.*
@@ -167,7 +168,8 @@ object CallStateManager {
 
     fun onCallAdded(call: Call, isSimulated: Boolean? = null, handler: android.os.Handler? = null) {
         val id = call.getAlibiId()
-        if (CallRepository.getSession(id) != null) return
+        val existingSession = CallRepository.getSession(id)
+        if (existingSession != null && existingSession !is OptimisticCallSession) return
 
         val isSimulatedCall = isSimulated ?: (call.details.extras?.containsKey(TelecomConstants.EXTRA_ALIBI_CALL_ID) == true)
         
@@ -246,10 +248,10 @@ object CallStateManager {
         CallRepository.getSession(targetId)?.resume()
     }
 
-    fun updateCallState(id: String, state: Int, overridePhase: SimulationPhase? = null) {
+    fun updateCallState(id: String, state: Int, overridePhase: SimulationPhase? = null, overrideType: Int? = null) {
         val session = CallRepository.getSession(id)
         when (session) {
-            is com.warhuman.alibi.telecom.session.SimulatedCallSession -> session.updateState(state, overridePhase)
+            is com.warhuman.alibi.telecom.session.SimulatedCallSession -> session.updateState(state, overridePhase, overrideType)
             is com.warhuman.alibi.telecom.session.OptimisticCallSession -> session.updateState(state, overridePhase)
         }
     }

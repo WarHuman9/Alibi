@@ -96,10 +96,7 @@ class CallService : InCallService() {
         val callId = CallStateManager.getCallId(call) ?: call.getAlibiId()
         Log.d("Alibi_CallService", "[$now] onCallRemoved: system signal for $callId (hash=$callHash)")
         
-        // Task 14: Immediate removal from manager map to prevent UI deadlock
-        CallStateManager.removeCall(callId)
-        
-        // Still call the formal cleanup to unregister callbacks
+        // Clean up callbacks and remove from manager map
         CallStateManager.onCallRemoved(call)
 
         // Cleanup global listeners only if no more calls are active

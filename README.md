@@ -35,7 +35,6 @@
 | **Jetpack Compose Ecosystem**         | Modern declarative UI powered by **Compose Material 3**, **Jetpack Navigation 3**, **Material 3 Adaptive Layouts**, and `Lifecycle` integration.                                |
 | **Telecom API (`InCallService`)**     | `CallService` binds to Android's native Telecom manager to manage real phone calls, capture call events, and act as a Default Dialer UI.                                        |
 | **Telecom API (`ConnectionService`)** | `SimulatedConnectionService` registers a self-managed `PhoneAccount` (`CAPABILITY_SELF_MANAGED`) to drive native-like simulated calls through Android's telephony architecture. |
-| **Foreground Services**               | `CallNotificationService` enforces Android 14/15/16 Foreground Service (FGS) compliance (`phoneCall`, `microphone`) with synchronous `startForeground` execution.               |
 | **Audio & Sensor Hardware**           | Integrated `ProximityController` (Proximity Sensor management) and `AudioHeartbeatManager` (AudioTrack heartbeat) for hardware-level call behavior.                             |
 
 ### 💡 Why This Architecture?
@@ -50,7 +49,7 @@
 Alibi allows users to schedule or immediately trigger authentic-looking incoming, outgoing, or missed calls with customizable caller information, delay timers, and call durations.
 
 ```
-[ User Input / Trigger ]
+[ User Input (PhoneNumber, Ringing/Dialing, Duration, AdvanceDetails) / Trigger (PlaceCall) ]
            │
            ▼
 [ SimulatedCallRequest ] ──► [ OptimisticCallSession ] (Instant UI Responsiveness)
@@ -241,7 +240,7 @@ Currently, Alibi is in active development and has not yet been published to publ
    ```bash
    adb install app/build/outputs/apk/debug/app-debug.apk
    ```
-   * *(Change ``` debug ``` to ```release``` , if you want to release-build)*
+   * *(Change ``` debug ``` to ```release``` , if you want to release-build and update the __SignConfig__ in ```local.properties```)*
 
 ### Releases
 Pre-built APK files for releases can be downloaded from the **GitHub Repository Releases** tab when available.

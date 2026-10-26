@@ -57,11 +57,12 @@ class SimulatedCallSession(
     /**
      * Internal helper to update metadata from external controllers (like SimulationController).
      */
-    fun updateState(state: Int, phase: SimulationPhase? = null) {
+    fun updateState(state: Int, phase: SimulationPhase? = null, type: Int? = null) {
         _metadata.update { current ->
             current.copy(
                 state = state,
                 phase = phase ?: current.phase,
+                type = type ?: current.type,
                 isHolding = (state == Call.STATE_HOLDING),
                 answerTime = if (state == Call.STATE_ACTIVE && current.answerTime == 0L) 
                     System.currentTimeMillis() else current.answerTime

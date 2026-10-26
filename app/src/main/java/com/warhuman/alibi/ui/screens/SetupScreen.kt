@@ -274,7 +274,8 @@ fun SetupScreen(onNavigateToCall: (String) -> Unit) {
             if (isReady && phoneNumber.isNotBlank()) {
                 StartCallFAB(enabled = !isBusy) {
                     val customTime = getSelectedTimestamp()
-                    val duration = if (durationSeconds.isBlank() || durationSeconds == "0") 0L else durationSeconds.toLongOrNull() ?: 0L
+                    val parsedDuration = if (durationSeconds.isBlank() || durationSeconds == "0") 0L else durationSeconds.toLongOrNull() ?: 0L
+                    val duration = parsedDuration.coerceIn(0L, 86400L)
                     scope.launch {
                         if (callDirection == CallLog.Calls.OUTGOING_TYPE) {
                             telecomHelper.startOutgoingCall(phoneNumber, autoAnswerDelay.toIntOrNull() ?: 0, customTime, duration, selectedSim?.handle, featureFlags)

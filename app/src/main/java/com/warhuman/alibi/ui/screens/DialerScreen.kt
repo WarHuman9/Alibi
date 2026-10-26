@@ -228,7 +228,7 @@ private fun DialerScreenContent(
             enter = expandVertically() + fadeIn(),
             exit = shrinkVertically() + fadeOut()
         ) {
-            val isCallEnabled = phoneNumber.filter { it.isDigit() || it == '+' }.length >= 10
+            val isCallEnabled = phoneNumber.isNotBlank() && phoneNumber.any { it.isDigit() || it == '*' || it == '#' }
             DialPad(
                 textFieldValue = textFieldValue,
                 onValueChange = { textFieldValue = it },
