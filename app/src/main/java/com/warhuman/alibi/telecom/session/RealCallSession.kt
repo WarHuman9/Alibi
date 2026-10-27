@@ -52,13 +52,18 @@ class RealCallSession(
             call.state
         }
 
+        val rawNumber = details.handle?.schemeSpecificPart?.ifBlank { null }
+        val number = rawNumber ?: "Unknown"
+        val rawName = details.callerDisplayName?.ifBlank { null }
+        val name = rawName ?: number
+
         return CallMetadata(
             id = id,
             call = call,
             isSimulated = false,
             isRealCall = true,
-            number = details.handle?.schemeSpecificPart ?: "Unknown",
-            name = details.callerDisplayName ?: details.handle?.schemeSpecificPart ?: "Unknown",
+            number = number,
+            name = name,
             state = state,
             startTime = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) details.creationTimeMillis else 0L,
             answerTime = if (state == Call.STATE_ACTIVE) details.connectTimeMillis else 0L,

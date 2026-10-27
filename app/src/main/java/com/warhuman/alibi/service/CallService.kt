@@ -126,8 +126,9 @@ class CallService : InCallService() {
         val id = call.getAlibiId()
         
         // Fast Metadata Extraction: Extract directly from Call object to avoid race conditions with StateFlow.
-        val phoneNumber = details.handle?.schemeSpecificPart ?: "Unknown"
-        val name = details.callerDisplayName ?: phoneNumber
+        val rawNumber = details.handle?.schemeSpecificPart?.ifBlank { null }
+        val phoneNumber = rawNumber ?: "Unknown"
+        val name = details.callerDisplayName?.ifBlank { null } ?: phoneNumber
         
         val intent = Intent(this, CallNotificationService::class.java).apply {
             putExtra(TelecomConstants.EXTRA_CALL_ID, id)
