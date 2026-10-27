@@ -12,7 +12,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
-import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
+import androidx.compose.material3.adaptive.currentWindowAdaptiveInfoV2
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
@@ -49,7 +49,13 @@ private fun LiveTicker(
         LaunchedEffect(Unit) {
             while (true) {
                 val now = Calendar.getInstance()
-                datePickerState.selectedDateMillis = now.timeInMillis
+                // Convert local Year, Month, Day to UTC Midnight for DatePickerState
+                val utcTodayMillis = Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply {
+                    clear()
+                    set(now.get(Calendar.YEAR), now.get(Calendar.MONTH), now.get(Calendar.DAY_OF_MONTH))
+                }.timeInMillis
+
+                datePickerState.selectedDateMillis = utcTodayMillis
                 timePickerState.hour = now.get(Calendar.HOUR_OF_DAY)
                 timePickerState.minute = now.get(Calendar.MINUTE)
                 onSecondsChange(now.get(Calendar.SECOND))
@@ -150,22 +156,28 @@ fun SetupScreen(onNavigateToCall: (String) -> Unit) {
         }
     }
 
-    val windowAdaptiveInfo = currentWindowAdaptiveInfo()
+    val windowAdaptiveInfo = currentWindowAdaptiveInfoV2()
     val isExpanded = windowAdaptiveInfo.windowSizeClass.isWidthAtLeastBreakpoint(androidx.window.core.layout.WindowSizeClass.WIDTH_DP_EXPANDED_LOWER_BOUND)
 
     // --- Internal Helpers ---
-    fun getSelectedTimestamp(): Long = Calendar.getInstance().apply {
+    fun getSelectedTimestamp(): Long {
         val selectedDateMillis = datePickerState.selectedDateMillis ?: System.currentTimeMillis()
-        val tempCal = Calendar.getInstance().apply { timeInMillis = selectedDateMillis }
-        
-        set(Calendar.YEAR, tempCal.get(Calendar.YEAR))
-        set(Calendar.MONTH, tempCal.get(Calendar.MONTH))
-        set(Calendar.DAY_OF_MONTH, tempCal.get(Calendar.DAY_OF_MONTH))
-        set(Calendar.HOUR_OF_DAY, timePickerState.hour)
-        set(Calendar.MINUTE, timePickerState.minute)
-        set(Calendar.SECOND, selectedSeconds)
-        set(Calendar.MILLISECOND, 0)
-    }.timeInMillis
+        // Extract Year, Month, Day in UTC (matching DatePickerState representation)
+        val utcCal = Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply {
+            timeInMillis = selectedDateMillis
+        }
+
+        // Apply Year, Month, Day to local Calendar alongside timePickerState hour/minute/seconds
+        return Calendar.getInstance().apply {
+            set(Calendar.YEAR, utcCal.get(Calendar.YEAR))
+            set(Calendar.MONTH, utcCal.get(Calendar.MONTH))
+            set(Calendar.DAY_OF_MONTH, utcCal.get(Calendar.DAY_OF_MONTH))
+            set(Calendar.HOUR_OF_DAY, timePickerState.hour)
+            set(Calendar.MINUTE, timePickerState.minute)
+            set(Calendar.SECOND, selectedSeconds)
+            set(Calendar.MILLISECOND, 0)
+        }.timeInMillis
+    }
 
     val featureFlags by remember(networkType, callTypeMetadata, callOrigin) {
         derivedStateOf {
@@ -392,7 +404,15 @@ private fun SetupForm(
         HorizontalDivider(Modifier.padding(vertical = 4.dp))
         
         CustomStartTimeSection(
-            dateText = datePickerState.selectedDateMillis?.let { dateFormatter.format(Date(it)) } ?: "Select Date",
+            dateText = datePickerState.selectedDateMillis?.let {
+                val utcCal = Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply { timeInMillis = it }
+                val localCal = Calendar.getInstance().apply {
+                    set(Calendar.YEAR, utcCal.get(Calendar.YEAR))
+                    set(Calendar.MONTH, utcCal.get(Calendar.MONTH))
+                    set(Calendar.DAY_OF_MONTH, utcCal.get(Calendar.DAY_OF_MONTH))
+                }
+                dateFormatter.format(localCal.time)
+            } ?: "Select Date",
             timeText = Calendar.getInstance().apply { 
                 set(Calendar.HOUR_OF_DAY, timePickerState.hour)
                 set(Calendar.MINUTE, timePickerState.minute) 
