@@ -175,8 +175,11 @@ class CallNotificationService : Service() {
             val callId = it.getStringExtra(TelecomConstants.EXTRA_CALL_ID) 
                 ?: it.getStringExtra(TelecomConstants.EXTRA_ALIBI_CALL_ID)
             
-            val phoneNumber = it.getStringExtra(TelecomConstants.EXTRA_PHONE_NUMBER) ?: "Unknown"
-            val name = it.getStringExtra(TelecomConstants.EXTRA_NAME) ?: phoneNumber
+            val rawPhoneNumber = it.getStringExtra(TelecomConstants.EXTRA_PHONE_NUMBER)?.ifBlank { null }
+            val phoneNumber = rawPhoneNumber ?: "Unknown"
+            
+            val rawName = it.getStringExtra(TelecomConstants.EXTRA_NAME)?.ifBlank { null }
+            val name = rawName ?: phoneNumber
             val isIncoming = it.getBooleanExtra(TelecomConstants.EXTRA_IS_INCOMING, false)
             val isDialing = it.getBooleanExtra(TelecomConstants.EXTRA_IS_DIALING, false)
             val isMissed = it.getBooleanExtra(TelecomConstants.EXTRA_IS_MISSED, false)
