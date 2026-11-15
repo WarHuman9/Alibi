@@ -24,6 +24,7 @@ class ContactsHelper(private val context: Context) {
     fun getContactsFlow(): Flow<List<ContactItem>> = callbackFlow {
         val observer = object : ContentObserver(null) {
             override fun onChange(selfChange: Boolean) {
+                ContactResolver.clearCache()
                 launch {
                     trySend(fetchContacts())
                 }
@@ -66,6 +67,9 @@ class ContactsHelper(private val context: Context) {
                         list.add(ContactItem(name, number))
                     }
                 }
+            }
+            if (list.isNotEmpty()) {
+                ContactResolver.warmupCache(list.map { Pair(it.number, it.name) })
             }
         } catch (e: SecurityException) {
             Log.e("ContactsHelper", "SecurityException during contacts query - permission likely revoked", e)

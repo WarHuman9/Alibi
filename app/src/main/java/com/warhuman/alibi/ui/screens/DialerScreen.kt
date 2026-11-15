@@ -42,6 +42,7 @@ import com.warhuman.alibi.telecom.CallMetadata
 import com.warhuman.alibi.telecom.CallStateManager
 import com.warhuman.alibi.telecom.TelecomHelper
 import com.warhuman.alibi.util.CallLogHelper
+import com.warhuman.alibi.util.ContactResolver
 import androidx.compose.ui.tooling.preview.Preview
 import com.warhuman.alibi.ui.theme.AlibiTheme
 import androidx.compose.foundation.text.KeyboardOptions
@@ -104,11 +105,16 @@ private fun DialerScreenContent(
     }
     
     // --- Reactive Data ---
+    var callLimit by rememberSaveable { mutableIntStateOf(200) }
     val hasCallLogPermission = systemStatus.isCallLogGranted
-    val recentCalls by if (hasCallLogPermission && !isInspectionMode) {
-        callLogHelper.getRecentCallsFlow(500).collectAsStateWithLifecycle(null)
+    val rawRecentCalls by if (hasCallLogPermission && !isInspectionMode) {
+        callLogHelper.getRecentCallsFlow(callLimit).collectAsStateWithLifecycle(null)
     } else {
         remember { mutableStateOf(emptyList()) }
+    }
+    
+    val groupedCalls = remember(rawRecentCalls) {
+        rawRecentCalls?.let { callLogHelper.groupCallsByDay(it) }
     }
     
     val simAccounts = remember { mutableStateListOf<TelecomHelper.SimAccount>() }
@@ -128,9 +134,23 @@ private fun DialerScreenContent(
     val listState = rememberLazyListState()
     var dialPadVisible by remember { mutableStateOf(false) }
     
-    val isLoading = recentCalls == null
-    val displayCalls = recentCalls ?: emptyList()
+    val isLoading = groupedCalls == null
+    val displayCalls = groupedCalls ?: emptyList()
     var selectedSim by remember { mutableStateOf<TelecomHelper.SimAccount?>(null) }
+
+    val shouldLoadMore by remember {
+        derivedStateOf {
+            val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            val totalItems = listState.layoutInfo.totalItemsCount
+            totalItems > 0 && lastVisible >= totalItems - 5
+        }
+    }
+
+    LaunchedEffect(shouldLoadMore) {
+        if (shouldLoadMore && (rawRecentCalls?.size ?: 0) >= callLimit) {
+            callLimit += 200
+        }
+    }
 
     LaunchedEffect(simAccounts.size) {
         if (selectedSim == null && simAccounts.isNotEmpty() && telecomHelper != null) {
@@ -146,8 +166,6 @@ private fun DialerScreenContent(
             dialPadVisible = false
         }
     }
-
-    // Removed auto-restore effect to keep dial pad hidden by default as requested.
 
     // --- Layout ---
     Column(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
@@ -182,9 +200,10 @@ private fun DialerScreenContent(
                     }
                 } else {
                     val filteredCalls = remember(searchQuery, displayCalls) {
-                        displayCalls.filter { 
-                            it.number.contains(searchQuery) || 
-                            (it.name?.contains(searchQuery, true) ?: false) 
+                        displayCalls.filter { call ->
+                            val resolvedName = ContactResolver.resolveFast(call.number, call.name)
+                            call.number.contains(searchQuery) || 
+                            resolvedName.contains(searchQuery, true)
                         }
                     }
                     when (selectedTab) {
@@ -376,7 +395,7 @@ private fun SearchBar(query: String, onQueryChange: (String) -> Unit, placeholde
 }
 
 @Composable
-fun RecentCallsList(state: LazyListState, calls: List<CallLogHelper.CallLogItem>, sims: List<TelecomHelper.SimAccount>, onCallClick: (String) -> Unit) {
+fun RecentCallsList(state: LazyListState, calls: List<CallLogHelper.GroupedCallLogItem>, sims: List<TelecomHelper.SimAccount>, onCallClick: (String) -> Unit) {
     LazyColumn(state = state, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
         items(calls, key = { it.id }) { call ->
             val sim = sims.find { 
@@ -389,7 +408,7 @@ fun RecentCallsList(state: LazyListState, calls: List<CallLogHelper.CallLogItem>
 }
 
 @Composable
-private fun RecentCallListItem(call: CallLogHelper.CallLogItem, simLabel: String, onClick: () -> Unit) {
+private fun RecentCallListItem(call: CallLogHelper.GroupedCallLogItem, simLabel: String, onClick: () -> Unit) {
     val formatter = remember { SimpleDateFormat("MMM dd, HH:mm:ss", Locale.getDefault()) }
     val isMissed = call.type == CallLog.Calls.MISSED_TYPE || call.type == CallLog.Calls.REJECTED_TYPE
     
@@ -412,8 +431,9 @@ private fun RecentCallListItem(call: CallLogHelper.CallLogItem, simLabel: String
         modifier = Modifier.clickable { onClick() },
         headlineContent = { 
             Row(verticalAlignment = Alignment.CenterVertically) {
-                val displayName = call.name?.takeIf { it.isNotBlank() } ?: call.number.takeIf { it.isNotBlank() } ?: "Unknown"
-                Text(text = displayName, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
+                val resolvedName = ContactResolver.resolveFast(call.number, call.name)
+                val titleText = if (call.count > 1) "$resolvedName (${call.count})" else resolvedName
+                Text(text = titleText, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.width(8.dp))
                 if ((call.features and CallLog.Calls.FEATURES_HD_CALL) != 0) FeatureBadge(Icons.Rounded.HighQuality)
                 if ((call.features and CallLog.Calls.FEATURES_WIFI) != 0) FeatureBadge(Icons.Rounded.Wifi)

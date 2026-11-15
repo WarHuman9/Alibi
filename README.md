@@ -10,7 +10,7 @@
 
 <p>
 
-[![Kotlin](https://img.shields.io/badge/Language-Kotlin%202.1.20-7F52FF.svg?style=flat-square&logo=kotlin&logoColor=white)](https://kotlinlang.org)
+[![Kotlin](https://img.shields.io/badge/Language-Kotlin%202.4+-7F52FF.svg?style=flat-square&logo=kotlin&logoColor=white)](https://kotlinlang.org)
 [![Platform](https://img.shields.io/badge/Platform-Android-3DDC84.svg?style=flat-square&logo=android&logoColor=white)](https://www.android.com)
 [![Jetpack Compose](https://img.shields.io/badge/UI-Jetpack%20Compose-4285F4.svg?style=flat-square&logo=jetpackcompose&logoColor=white)](https://developer.android.com/jetpack/compose)
 [![Telecom API](https://img.shields.io/badge/API-Android%20Telecom%201.0.1-00897B.svg?style=flat-square&logo=android&logoColor=white)](https://developer.android.com/guide/topics/connectivity/telecom)
