@@ -25,7 +25,7 @@ data class ContactItem(val name: String, val number: String)
 @Composable
 fun ContactsScreen(
     searchQuery: String = "",
-    onContactClick: (String) -> Unit
+    onContactClick: (phoneNumber: String, contactName: String?) -> Unit
 ) {
     val context = LocalContext.current
     val contactsHelper = remember { ContactsHelper(context) }
@@ -59,7 +59,7 @@ fun ContactsScreen(
     } else {
         LazyColumn(modifier = Modifier.fillMaxSize()) {
             items(filteredContacts) { contact ->
-                ContactListItem(contact = contact, onClick = { onContactClick(contact.number) })
+                ContactListItem(contact = contact, onClick = { onContactClick(contact.number, contact.name) })
             }
         }
     }

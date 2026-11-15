@@ -23,6 +23,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
@@ -118,7 +119,11 @@ fun MultiCallSwapBanner(
 }
 
 @Composable
-fun CallHeader(statusText: String, phoneNumber: String) {
+fun CallHeader(
+    statusText: String,
+    displayName: String,
+    phoneNumber: String
+) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Text(
             text = statusText,
@@ -129,14 +134,32 @@ fun CallHeader(statusText: String, phoneNumber: String) {
 
         Spacer(modifier = Modifier.height(16.dp))
 
+        val nameToDisplay = displayName.ifBlank { phoneNumber.ifBlank { "Unknown" } }
         Text(
-            text = phoneNumber,
+            text = nameToDisplay,
             style = MaterialTheme.typography.headlineMedium.copy(
                 fontWeight = FontWeight.Bold,
-                fontSize = 36.sp
+                fontSize = 32.sp
             ),
-            color = MaterialTheme.colorScheme.onBackground
+            color = MaterialTheme.colorScheme.onBackground,
+            textAlign = TextAlign.Center
         )
+
+        val showNumberOverlay = phoneNumber.isNotBlank() &&
+                !phoneNumber.equals(displayName, ignoreCase = true) &&
+                displayName.isNotBlank()
+
+        if (showNumberOverlay) {
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = phoneNumber,
+                style = MaterialTheme.typography.bodyLarge.copy(
+                    fontWeight = FontWeight.Medium
+                ),
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                textAlign = TextAlign.Center
+            )
+        }
     }
 }
 

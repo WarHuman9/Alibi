@@ -65,19 +65,22 @@ enum class PhoneSubTab { RECENTS, CONTACTS }
  */
 @Composable
 fun DialerScreen(
-    mainViewModel: MainViewModel = viewModel()
+    mainViewModel: MainViewModel = viewModel(),
+    onNavigateToContactProfile: (phoneNumber: String, contactName: String?) -> Unit = { _, _ -> }
 ) {
     val deeplinkNumber by mainViewModel.deeplinkNumber.collectAsStateWithLifecycle()
     DialerScreenContent(
         deeplinkNumber = deeplinkNumber,
-        onConsumeDeeplink = { mainViewModel.consumeDeeplink() }
+        onConsumeDeeplink = { mainViewModel.consumeDeeplink() },
+        onNavigateToContactProfile = onNavigateToContactProfile
     )
 }
 
 @Composable
 private fun DialerScreenContent(
     deeplinkNumber: String?,
-    onConsumeDeeplink: () -> Unit
+    onConsumeDeeplink: () -> Unit,
+    onNavigateToContactProfile: (phoneNumber: String, contactName: String?) -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -212,19 +215,16 @@ private fun DialerScreenContent(
                                 state = listState,
                                 calls = filteredCalls,
                                 sims = simAccounts,
-                                onCallClick = { 
-                                    textFieldValue = TextFieldValue(text = it, selection = TextRange(it.length))
-                                    dialPadVisible = true
+                                onCallClick = { number, name -> 
+                                    onNavigateToContactProfile(number, name)
                                 }
                             )
                         }
                         PhoneSubTab.CONTACTS -> {
                             ContactsScreen(
                                 searchQuery = searchQuery,
-                                onContactClick = { 
-                                    textFieldValue = TextFieldValue(text = it, selection = TextRange(it.length))
-                                    selectedTab = PhoneSubTab.RECENTS
-                                    dialPadVisible = true
+                                onContactClick = { number, name -> 
+                                    onNavigateToContactProfile(number, name)
                                 }
                             )
                         }
@@ -395,14 +395,19 @@ private fun SearchBar(query: String, onQueryChange: (String) -> Unit, placeholde
 }
 
 @Composable
-fun RecentCallsList(state: LazyListState, calls: List<CallLogHelper.GroupedCallLogItem>, sims: List<TelecomHelper.SimAccount>, onCallClick: (String) -> Unit) {
+fun RecentCallsList(
+    state: LazyListState,
+    calls: List<CallLogHelper.GroupedCallLogItem>,
+    sims: List<TelecomHelper.SimAccount>,
+    onCallClick: (number: String, name: String?) -> Unit
+) {
     LazyColumn(state = state, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
         items(calls, key = { it.id }) { call ->
             val sim = sims.find { 
                 it.handle.id == call.phoneAccountId && 
                 it.handle.componentName?.flattenToString() == call.phoneAccountComponent 
             } ?: sims.find { it.handle.id == call.phoneAccountId }
-            RecentCallListItem(call = call, simLabel = sim?.label ?: "Unknown", onClick = { onCallClick(call.number) })
+            RecentCallListItem(call = call, simLabel = sim?.label ?: "Unknown", onClick = { onCallClick(call.number, call.name) })
         }
     }
 }
@@ -625,7 +630,8 @@ fun DialerScreenPreview() {
     AlibiTheme {
         DialerScreenContent(
             deeplinkNumber = null,
-            onConsumeDeeplink = {}
+            onConsumeDeeplink = {},
+            onNavigateToContactProfile = { _, _ -> }
         )
     }
 }

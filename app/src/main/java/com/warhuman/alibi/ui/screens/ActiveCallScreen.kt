@@ -192,7 +192,11 @@ fun ActiveCallScreen(
 
                 Spacer(modifier = Modifier.height(32.dp))
 
-                CallHeader(statusText = statusText, phoneNumber = displayPhoneNumber)
+                CallHeader(
+                    statusText = statusText,
+                    displayName = callInfo?.name ?: "",
+                    phoneNumber = displayPhoneNumber
+                )
 
                 Spacer(modifier = Modifier.height(16.dp))
 

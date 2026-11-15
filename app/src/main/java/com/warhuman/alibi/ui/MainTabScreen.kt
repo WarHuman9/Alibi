@@ -16,7 +16,8 @@ import com.warhuman.alibi.ui.screens.SetupScreen
 
 @Composable
 fun MainTabScreen(
-    onNavigateToCall: (String) -> Unit
+    onNavigateToCall: (String) -> Unit,
+    onNavigateToContactProfile: (phoneNumber: String, contactName: String?) -> Unit = { _, _ -> }
 ) {
     var activeTab by rememberSaveable { mutableStateOf("phone") }
     
@@ -42,7 +43,7 @@ fun MainTabScreen(
                 .statusBarsPadding()
         ) {
             when (activeTab) {
-                "phone" -> DialerScreen()
+                "phone" -> DialerScreen(onNavigateToContactProfile = onNavigateToContactProfile)
                 "simulate" -> SetupScreen(onNavigateToCall = onNavigateToCall)
             }
         }

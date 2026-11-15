@@ -12,3 +12,13 @@ data class ActiveCallRoute(val callId: String) : NavKey {
         require(callId.isNotBlank()) { "ActiveCallRoute requires a non-blank callId" }
     }
 }
+
+@Serializable
+data class ContactProfileRoute(
+    val phoneNumber: String,
+    val contactName: String? = null
+) : NavKey {
+    init {
+        require(phoneNumber.isNotBlank()) { "ContactProfileRoute requires a non-blank phoneNumber" }
+    }
+}

@@ -22,11 +22,13 @@ import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.ui.NavDisplay
 import com.warhuman.alibi.telecom.CallStateManager
 import com.warhuman.alibi.ui.ActiveCallRoute
+import com.warhuman.alibi.ui.ContactProfileRoute
 import com.warhuman.alibi.ui.MainTabScreen
 import com.warhuman.alibi.ui.MainTabsRoute
 import com.warhuman.alibi.ui.MainViewModel
 import com.warhuman.alibi.ui.SystemStatus
 import com.warhuman.alibi.ui.screens.ActiveCallScreen
+import com.warhuman.alibi.ui.screens.ContactProfileScreen
 import com.warhuman.alibi.ui.theme.AlibiTheme
 import com.warhuman.alibi.util.RoleHelper
 import android.Manifest
@@ -308,14 +310,21 @@ fun AlibiApp() {
             when (key) {
                 is MainTabsRoute -> NavEntry(key) {
                     MainTabScreen(
-                        onNavigateToCall = { _ ->
-                            // Manual navigation from Setup/Dialer is now largely reactive
-                            // But, we keep the callback for consistency if needed.
+                        onNavigateToCall = { _ -> },
+                        onNavigateToContactProfile = { number, name ->
+                            backStack.add(ContactProfileRoute(number, name))
                         }
                     )
                 } as NavEntry<NavKey>
                 is ActiveCallRoute -> NavEntry(key) {
                     ActiveCallScreen(callId = key.callId)
+                } as NavEntry<NavKey>
+                is ContactProfileRoute -> NavEntry(key) {
+                    ContactProfileScreen(
+                        phoneNumber = key.phoneNumber,
+                        contactName = key.contactName,
+                        onBackClick = { backStack.removeLastOrNull() }
+                    )
                 } as NavEntry<NavKey>
                 else -> error("Unknown key: $key")
             }
