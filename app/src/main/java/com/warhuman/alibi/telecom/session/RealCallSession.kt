@@ -1,22 +1,32 @@
 package com.warhuman.alibi.telecom.session
 
+import android.content.Context
 import android.os.Build
 import android.telecom.Call
 import android.telecom.VideoProfile
 import com.warhuman.alibi.telecom.CallMetadata
 import com.warhuman.alibi.telecom.CallStateManager
+import com.warhuman.alibi.util.ContactResolver
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 
 /**
  * Implementation of [CallSession] for system (real) calls.
  */
 class RealCallSession(
     private val call: Call,
-    override val id: String
+    override val id: String,
+    private val context: Context? = null
 ) : CallSession {
+
+    private val sessionScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     private val _metadata = MutableStateFlow(extractMetadata(call))
     override val metadata: StateFlow<CallMetadata> = _metadata.asStateFlow()
@@ -37,10 +47,24 @@ class RealCallSession(
 
     init {
         call.registerCallback(callback)
+        resolveContactNameAsync()
     }
 
     private fun updateMetadata() {
         _metadata.update { extractMetadata(call) }
+        resolveContactNameAsync()
+    }
+
+    private fun resolveContactNameAsync() {
+        val ctx = context ?: return
+        sessionScope.launch {
+            val number = _metadata.value.number
+            val callerIdName = call.details.callerDisplayName
+            val resolvedName = ContactResolver.resolveName(ctx, number, callerIdName)
+            if (resolvedName != _metadata.value.name) {
+                _metadata.update { it.copy(name = resolvedName) }
+            }
+        }
     }
 
     private fun extractMetadata(call: Call): CallMetadata {
@@ -52,13 +76,17 @@ class RealCallSession(
             call.state
         }
 
+        val rawNumber = details.handle?.schemeSpecificPart?.ifBlank { null }
+        val number = rawNumber ?: "Unknown"
+        val fastName = ContactResolver.resolveFast(number, details.callerDisplayName)
+
         return CallMetadata(
             id = id,
             call = call,
             isSimulated = false,
             isRealCall = true,
-            number = details.handle?.schemeSpecificPart ?: "Unknown",
-            name = details.callerDisplayName ?: details.handle?.schemeSpecificPart ?: "Unknown",
+            number = number,
+            name = fastName,
             state = state,
             startTime = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) details.creationTimeMillis else 0L,
             answerTime = if (state == Call.STATE_ACTIVE) details.connectTimeMillis else 0L,
@@ -86,5 +114,6 @@ class RealCallSession(
 
     fun cleanup() {
         call.unregisterCallback(callback)
+        sessionScope.cancel()
     }
 }

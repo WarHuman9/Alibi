@@ -166,7 +166,7 @@ object CallStateManager {
 
     // --- Session-based entry points ---
 
-    fun onCallAdded(call: Call, isSimulated: Boolean? = null, handler: android.os.Handler? = null) {
+    fun onCallAdded(call: Call, isSimulated: Boolean? = null, handler: android.os.Handler? = null, context: android.content.Context? = null) {
         val id = call.getAlibiId()
         val existingSession = CallRepository.getSession(id)
         if (existingSession != null && existingSession !is OptimisticCallSession) return
@@ -174,7 +174,7 @@ object CallStateManager {
         val isSimulatedCall = isSimulated ?: (call.details.extras?.containsKey(TelecomConstants.EXTRA_ALIBI_CALL_ID) == true)
         
         if (!isSimulatedCall) {
-            val session = RealCallSession(call, id)
+            val session = RealCallSession(call, id, context)
             CallRepository.addSession(session)
             _currentCallId.value = id
         }

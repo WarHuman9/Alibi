@@ -64,7 +64,7 @@ class CallService : InCallService() {
         Log.d("Alibi_CallService", "Resolved Call ID: $id (isSimulated=$isSimulated, byHandle=$isSimulatedByHandle)")
 
         // Register with manager BEFORE triggering notification intent
-        CallStateManager.onCallAdded(call, isSimulated, backgroundHandler)
+        CallStateManager.onCallAdded(call, isSimulated, backgroundHandler, this)
         
         // Task 18: One-time notification start. 
         // FullScreenIntent on notification delegates activity launch exclusively to SystemUI
@@ -126,8 +126,9 @@ class CallService : InCallService() {
         val id = call.getAlibiId()
         
         // Fast Metadata Extraction: Extract directly from Call object to avoid race conditions with StateFlow.
-        val phoneNumber = details.handle?.schemeSpecificPart ?: "Unknown"
-        val name = details.callerDisplayName ?: phoneNumber
+        val rawNumber = details.handle?.schemeSpecificPart?.ifBlank { null }
+        val phoneNumber = rawNumber ?: "Unknown"
+        val name = com.warhuman.alibi.util.ContactResolver.resolveFast(phoneNumber, details.callerDisplayName)
         
         val intent = Intent(this, CallNotificationService::class.java).apply {
             putExtra(TelecomConstants.EXTRA_CALL_ID, id)

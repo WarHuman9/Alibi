@@ -23,10 +23,11 @@ import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.NonCancellable
+import java.util.Calendar
 
 /**
  * Utility to interact with the system CallLog database.
- * Provides reactive flows and safe insertion methods.
+ * Provides reactive flows, same-day event grouping, and safe insertion methods.
  */
 class CallLogHelper private constructor(private val context: Context) {
 
@@ -46,9 +47,22 @@ class CallLogHelper private constructor(private val context: Context) {
         val phoneAccountComponent: String? = null,
     )
 
+    data class GroupedCallLogItem(
+        val id: Long,
+        val number: String,
+        val name: String? = null,
+        val count: Int = 1,
+        val date: Long,
+        val duration: Long,
+        val type: Int,
+        val features: Int = 0,
+        val phoneAccountId: String? = null,
+        val phoneAccountComponent: String? = null,
+        val calls: List<CallLogItem> = emptyList()
+    )
+
     /**
      * Returns a Flow that emits a list of recent calls whenever the call log database changes.
-     * Limit increased to 500 for better performance/reliability trade-off.
      */
     fun getRecentCallsFlow(limit: Int = 500): Flow<List<CallLogItem>> = callbackFlow {
         val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
@@ -80,15 +94,13 @@ class CallLogHelper private constructor(private val context: Context) {
         }
     }
     .onStart { 
-        // Bug 28: Ensure early collectors get data immediately on IO thread
         emit(getRecentCalls(limit)) 
     }
     .flowOn(Dispatchers.IO)
     .conflate()
 
     /**
-     * Fetches the recent calls from the system database.
-     * Uses manual limiting to avoid "Invalid token LIMIT" crashes on certain Android versions.
+     * Fetches recent calls from the system database.
      */
     fun getRecentCalls(limit: Int = 500): List<CallLogItem> {
         val list = mutableListOf<CallLogItem>()
@@ -112,7 +124,6 @@ class CallLogHelper private constructor(private val context: Context) {
                     val rawNumber = it.getStringSafe(CallLog.Calls.NUMBER)
                     val cachedFormat = it.getStringSafe(CallLog.Calls.CACHED_FORMATTED_NUMBER)
                     
-                    // Bug 29: Harden number resolution to prevent "Unknown" pollution
                     val resolvedNumber = rawNumber 
                         ?: cachedFormat 
                         ?: it.getStringSafe(CallLog.Calls.CACHED_NAME) 
@@ -143,9 +154,62 @@ class CallLogHelper private constructor(private val context: Context) {
     }
 
     /**
+     * Groups raw call log items by (normalizedPhoneNumber, calendarDay).
+     * Multiple calls to/from the same number on the same day condense into 1 item
+     * with count > 1 and the latest timestamp.
+     */
+    fun groupCallsByDay(rawCalls: List<CallLogItem>): List<GroupedCallLogItem> {
+        val result = mutableListOf<GroupedCallLogItem>()
+        val groupedMap = mutableMapOf<Pair<String, Long>, MutableList<CallLogItem>>()
+        val keysOrder = mutableListOf<Pair<String, Long>>()
+
+        for (item in rawCalls) {
+            val normalizedNum = ContactResolver.normalizeKey(item.number)
+            val dayKey = getDayKey(item.date)
+            val compositeKey = Pair(normalizedNum, dayKey)
+
+            if (!groupedMap.containsKey(compositeKey)) {
+                groupedMap[compositeKey] = mutableListOf()
+                keysOrder.add(compositeKey)
+            }
+            groupedMap[compositeKey]?.add(item)
+        }
+
+        for (key in keysOrder) {
+            val group = groupedMap[key] ?: continue
+            val latest = group.first()
+            result.add(
+                GroupedCallLogItem(
+                    id = latest.id,
+                    number = latest.number,
+                    name = latest.name,
+                    count = group.size,
+                    date = latest.date,
+                    duration = group.sumOf { it.duration },
+                    type = latest.type,
+                    features = group.fold(0) { acc, elem -> acc or elem.features },
+                    phoneAccountId = latest.phoneAccountId,
+                    phoneAccountComponent = latest.phoneAccountComponent,
+                    calls = group
+                )
+            )
+        }
+        return result
+    }
+
+    private fun getDayKey(timestamp: Long): Long {
+        val cal = Calendar.getInstance().apply {
+            timeInMillis = timestamp
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+        return cal.timeInMillis
+    }
+
+    /**
      * Inserts a call record into the system call log using a Universal Version-Safe strategy.
-     * 1. Android 14+ (API 34) uses enhanced metadata (NEW, IS_READ, NUMBER_PRESENTATION).
-     * 2. Versions below API 34 or failures use a "Pure Minimalist" fallback (NUMBER, DATE, DURATION, TYPE).
      */
     suspend fun insertCallLog(
         phoneNumber: String,
@@ -160,7 +224,6 @@ class CallLogHelper private constructor(private val context: Context) {
 
         Log.d(TAG, "insertCallLog: Starting Universal Version-Safe insertion for $sanitizedNumber")
 
-        // Try Enhanced Insertion if API 34+
         if (Build.VERSION.SDK_INT >= 34) {
             try {
                 val enhancedValues = ContentValues().apply {
@@ -175,7 +238,6 @@ class CallLogHelper private constructor(private val context: Context) {
                     if (features != 0) {
                         put(CallLog.Calls.FEATURES, features)
                     }
-                    // Bug 25: Safely handle null componentName
                     simHandle?.let { handle ->
                         handle.componentName?.let { comp ->
                             put(CallLog.Calls.PHONE_ACCOUNT_COMPONENT_NAME, comp.flattenToString())
@@ -190,13 +252,11 @@ class CallLogHelper private constructor(private val context: Context) {
                     context.contentResolver.notifyChange(CallLog.Calls.CONTENT_URI, null)
                     return@withContext
                 }
-                Log.w(TAG, "Enhanced insertion returned null, retrying with minimalist...")
             } catch (e: Throwable) {
                 Log.e(TAG, "Enhanced insertion failed: ${e.message}. Falling back to minimalist.", e)
             }
         }
 
-        // Fallback: Pure Minimalist Set (Ensures log is saved even if schema is unexpected)
         try {
             val minimalistValues = ContentValues().apply {
                 put(CallLog.Calls.NUMBER, sanitizedNumber)
@@ -208,13 +268,10 @@ class CallLogHelper private constructor(private val context: Context) {
             val uri = context.contentResolver.insert(CallLog.Calls.CONTENT_URI, minimalistValues)
             if (uri != null) {
                 Log.d(TAG, "Minimalist insertion success: $uri")
-            } else {
-                Log.e(TAG, "Minimalist insertion failed: ContentResolver returned null")
             }
         } catch (e: Throwable) {
             Log.e(TAG, "Critical failure in minimalist insertion fallback", e)
         } finally {
-            // Always notify change to ensure UI refreshes
             context.contentResolver.notifyChange(CallLog.Calls.CONTENT_URI, null)
         }
     }
