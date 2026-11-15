@@ -126,8 +126,9 @@ class CallNotificationFactory(private val context: Context) {
         callId: String,
         isPrimary: Boolean
     ): Notification {
+        val displayName = name.ifBlank { phoneNumber.ifBlank { "Unknown" } }
         val person = Person.Builder()
-            .setName(name)
+            .setName(displayName)
             .setImportant(true)
             .build()
 

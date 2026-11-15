@@ -40,6 +40,7 @@ import com.warhuman.alibi.telecom.SimulationPhase
 import com.warhuman.alibi.util.ProximityController
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.time.Duration.Companion.milliseconds
 
 class MainActivity : ComponentActivity() {
 
@@ -285,7 +286,7 @@ fun AlibiApp() {
             // If the map becomes empty OR all calls are DISCONNECTED, return to MainTabsRoute
             if (backStack.any { it is ActiveCallRoute }) {
                 // 100ms settling debounce to allow smooth call handoffs/preemption without navigation flickering
-                delay(100)
+                delay(100.milliseconds)
                 val recheckedCall = CallStateManager.activeCalls.value.values.find {
                     it.state == Call.STATE_DIALING ||
                     it.state == Call.STATE_RINGING ||
@@ -309,7 +310,7 @@ fun AlibiApp() {
                     MainTabScreen(
                         onNavigateToCall = { _ ->
                             // Manual navigation from Setup/Dialer is now largely reactive
-                            // but we keep the callback for consistency if needed.
+                            // But, we keep the callback for consistency if needed.
                         }
                     )
                 } as NavEntry<NavKey>
