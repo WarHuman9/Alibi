@@ -27,7 +27,22 @@ object ContactResolver {
      */
     fun normalizeKey(phoneNumber: String): String {
         val clean = PhoneNumberUtils.normalizeNumber(phoneNumber)
-        return if (!clean.isNullOrBlank()) clean else phoneNumber.replace(Regex("[^0-9+]"), "")
+        val digits = if (!clean.isNullOrBlank()) clean else phoneNumber.replace(Regex("[^0-9+]"), "")
+        return if (digits.length > 10 && (digits.startsWith("+") || digits.startsWith("0"))) digits.takeLast(10) else digits
+    }
+
+    /**
+     * Robust telephonic phone number matcher that checks exact string equality,
+     * normalized key matching, and Android's native PhoneNumberUtils.compare.
+     */
+    fun isSameNumber(num1: String?, num2: String?): Boolean {
+        if (num1.isNullOrBlank() || num2.isNullOrBlank()) return false
+        if (num1 == num2) return true
+        val k1 = normalizeKey(num1)
+        val k2 = normalizeKey(num2)
+        if (k1 == k2) return true
+        if (k1.length >= 7 && k2.length >= 7 && (k1.endsWith(k2) || k2.endsWith(k1))) return true
+        return PhoneNumberUtils.compare(num1, num2)
     }
 
     /**

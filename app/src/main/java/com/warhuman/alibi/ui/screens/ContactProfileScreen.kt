@@ -75,11 +75,12 @@ fun ContactProfileScreen(
         remember { mutableStateOf(emptyList()) }
     }
 
+    val isLoading = rawRecentCalls == null
+
     val contactCallHistory = remember(rawRecentCalls, phoneNumber) {
-        val targetKey = ContactResolver.normalizeKey(phoneNumber)
         rawRecentCalls?.filter { item ->
-            ContactResolver.normalizeKey(item.number) == targetKey
-        } ?: emptyList()
+            ContactResolver.isSameNumber(item.number, phoneNumber)
+        }
     }
 
     Scaffold(
@@ -236,9 +237,10 @@ fun ContactProfileScreen(
                     color = MaterialTheme.colorScheme.onBackground
                 )
                 Spacer(modifier = Modifier.weight(1f))
-                if (contactCallHistory.isNotEmpty()) {
+                val historyList = contactCallHistory ?: emptyList()
+                if (historyList.isNotEmpty()) {
                     Text(
-                        text = "${contactCallHistory.size} entries",
+                        text = "${historyList.size} entries",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -250,7 +252,21 @@ fun ContactProfileScreen(
                 color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
             )
 
-            if (contactCallHistory.isEmpty()) {
+            val historyList = contactCallHistory ?: emptyList()
+            if (isLoading || contactCallHistory == null) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(36.dp),
+                        color = MaterialTheme.colorScheme.primary,
+                        strokeWidth = 3.dp
+                    )
+                }
+            } else if (historyList.isEmpty()) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -270,7 +286,7 @@ fun ContactProfileScreen(
                         .weight(1f),
                     contentPadding = PaddingValues(vertical = 8.dp)
                 ) {
-                    items(contactCallHistory, key = { it.id }) { call ->
+                    items(historyList, key = { it.id }) { call ->
                         CallHistoryItem(call = call)
                     }
                 }
